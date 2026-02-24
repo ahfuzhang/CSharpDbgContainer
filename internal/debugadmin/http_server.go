@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"io/fs"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -119,18 +121,355 @@ func (h *AdminHandler) handleStack(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	cmd := BuildStackCommand(ctx, h.target.PID())
-	cmd.Stdin = strings.NewReader("bt all\n")
-	output, err := cmd.Output()
+	startupOutput, stackOutput, stderrOutput, err := collectStackOutput(ctx, h.target.PID())
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
-	if len(output) > 0 {
-		_, _ = w.Write(output)
-	}
+	renderStackHTML(w, startupOutput, stackOutput, stderrOutput, err)
+}
+
+type stackThreadBlock struct {
+	header string
+	frames []string
+	extra  []string
+}
+
+func collectStackOutput(ctx context.Context, pid int) (string, string, string, error) {
+	cmd := BuildStackCommand(ctx, pid)
+	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
-		_, _ = fmt.Fprintf(w, "\n[stack command error] %v\n", err)
+		return "", "", "", fmt.Errorf("read stack stdout failed: %w", err)
 	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return "", "", "", fmt.Errorf("read stack stderr failed: %w", err)
+	}
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		return "", "", "", fmt.Errorf("open stack stdin failed: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return "", "", "", fmt.Errorf("start stack command failed: %w", err)
+	}
+
+	stdoutCh := make(chan []byte, 32)
+	stdoutErrCh := make(chan error, 1)
+	go readPipeChunks(ctx, stdoutPipe, stdoutCh, stdoutErrCh)
+
+	stderrCh := make(chan string, 1)
+	go func() {
+		data, _ := io.ReadAll(stderrPipe)
+		stderrCh <- string(data)
+	}()
+
+	var startupStdout bytes.Buffer
+	var allStdout bytes.Buffer
+	idleTimer := time.NewTimer(100 * time.Millisecond)
+	defer idleTimer.Stop()
+
+	sendCommand := false
+	commandIssued := false
+	preCommandClosed := false
+
+	for !sendCommand {
+		select {
+		case chunk, ok := <-stdoutCh:
+			if !ok {
+				preCommandClosed = true
+				sendCommand = true
+				break
+			}
+			allStdout.Write(chunk)
+			startupStdout.Write(chunk)
+			if !idleTimer.Stop() {
+				select {
+				case <-idleTimer.C:
+				default:
+				}
+			}
+			idleTimer.Reset(100 * time.Millisecond)
+		case <-idleTimer.C:
+			commandIssued = true
+			sendCommand = true
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			_ = cmd.Wait()
+			return startupStdout.String(), "", <-stderrCh, ctx.Err()
+		}
+	}
+
+	var runErr error
+	if commandIssued {
+		if _, err := io.WriteString(stdinPipe, "bt all\n"); err != nil && runErr == nil {
+			runErr = fmt.Errorf("send bt all command failed: %w", err)
+		}
+	}
+	if !preCommandClosed {
+		if err := stdinPipe.Close(); err != nil && runErr == nil {
+			runErr = fmt.Errorf("close stack command stdin failed: %w", err)
+		}
+	}
+
+	for chunk := range stdoutCh {
+		allStdout.Write(chunk)
+	}
+	stdoutErr := <-stdoutErrCh
+	waitErr := cmd.Wait()
+	stderrOutput := <-stderrCh
+
+	if runErr == nil && stdoutErr != nil && !errors.Is(stdoutErr, context.Canceled) {
+		runErr = fmt.Errorf("read stack stdout failed: %w", stdoutErr)
+	}
+	if runErr == nil && waitErr != nil {
+		runErr = waitErr
+	}
+
+	startupLen := startupStdout.Len()
+	allBytes := allStdout.Bytes()
+	stackBytes := []byte{}
+	if startupLen < len(allBytes) {
+		stackBytes = allBytes[startupLen:]
+	}
+	return startupStdout.String(), string(stackBytes), stderrOutput, runErr
+}
+
+func readPipeChunks(ctx context.Context, pipe io.Reader, chunkCh chan<- []byte, errCh chan<- error) {
+	defer close(chunkCh)
+	buffer := make([]byte, 4096)
+	for {
+		n, err := pipe.Read(buffer)
+		if n > 0 {
+			chunk := make([]byte, n)
+			copy(chunk, buffer[:n])
+			select {
+			case chunkCh <- chunk:
+			case <-ctx.Done():
+				errCh <- ctx.Err()
+				return
+			}
+		}
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				errCh <- nil
+			} else {
+				errCh <- err
+			}
+			return
+		}
+	}
+}
+
+func parseStackBlocks(raw string) ([]stackThreadBlock, []string) {
+	normalized := strings.ReplaceAll(raw, "\r\n", "\n")
+	normalized = strings.ReplaceAll(normalized, "\r", "\n")
+	lines := strings.Split(normalized, "\n")
+
+	threads := make([]stackThreadBlock, 0, 16)
+	misc := make([]string, 0, 8)
+	var current *stackThreadBlock
+
+	flush := func() {
+		if current != nil {
+			threads = append(threads, *current)
+			current = nil
+		}
+	}
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Thread ") {
+			flush()
+			current = &stackThreadBlock{header: trimmed}
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if current == nil {
+			misc = append(misc, trimmed)
+			continue
+		}
+		if strings.HasPrefix(trimmed, "#") {
+			current.frames = append(current.frames, trimmed)
+		} else {
+			current.extra = append(current.extra, trimmed)
+		}
+	}
+	flush()
+
+	sort.SliceStable(threads, func(i, j int) bool {
+		left := strings.Contains(threads[i].header, `name=".NET ThreadPool Worker"`)
+		right := strings.Contains(threads[j].header, `name=".NET ThreadPool Worker"`)
+		if left == right {
+			return false
+		}
+		return left
+	})
+
+	return threads, misc
+}
+
+func renderStackHTML(w http.ResponseWriter, startupOutput, stackOutput, stderrOutput string, runErr error) {
+	threads, misc := parseStackBlocks(stackOutput)
+
+	_, _ = io.WriteString(w, `<!doctype html><html><head><meta charset="utf-8"><title>Stack</title><style>
+body{margin:0;padding:24px;background:#f3f4f6;color:#111827;font-family:Consolas,Monaco,monospace;}
+.wrap{max-width:1200px;margin:0 auto;background:#ffffff;border:1px solid #d1d5db;border-radius:12px;padding:18px 20px;}
+h1{margin:0 0 12px 0;font-size:20px;}
+h2{margin:18px 0 8px 0;font-size:14px;color:#1f2937;}
+.startup{margin:0;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px;font-size:12px;color:#6b7280;white-space:pre-wrap;line-height:1.35;}
+.thread{margin-top:14px;}
+.thread-title{font-weight:700;color:#b91c1c;}
+.thread-stack{margin-top:6px;margin-left:16px;padding-left:10px;border-left:2px solid #d1d5db;}
+.frame,.thread-extra{white-space:pre-wrap;line-height:1.4;}
+.frame-idx{color:#374151;}
+.frame-ptr{color:#9ca3af;}
+.frame-dll{color:#6b7280;}
+.frame-sep{color:#6b7280;}
+.frame-func{color:#111827;}
+.frame-at{color:#6b7280;}
+.frame-path{color:#0f766e;}
+.frame-file{color:#1d4ed8;font-weight:700;}
+.thread-extra{color:#374151;}
+.misc,.stderr,.error{margin-top:16px;white-space:pre-wrap;padding:10px;border-radius:8px;}
+.misc{background:#eef2ff;border:1px solid #c7d2fe;color:#1f2937;}
+.stderr{background:#fff7ed;border:1px solid #fed7aa;color:#7c2d12;}
+.error{background:#fee2e2;border:1px solid #fecaca;color:#991b1b;}
+</style></head><body><div class="wrap"><h1>Stack Dump</h1>`)
+
+	startupTrimmed := strings.TrimSpace(startupOutput)
+	if startupTrimmed != "" {
+		_, _ = io.WriteString(w, `<h2>netcoredbg stdout (before "bt all")</h2>`)
+		_, _ = fmt.Fprintf(w, `<pre class="startup">%s</pre>`, html.EscapeString(startupTrimmed))
+	}
+
+	if len(threads) == 0 && strings.TrimSpace(stackOutput) == "" {
+		_, _ = io.WriteString(w, `<div class="misc">No stack data returned.</div>`)
+	}
+
+	for _, thread := range threads {
+		_, _ = io.WriteString(w, `<div class="thread">`)
+		_, _ = fmt.Fprintf(w, `<div class="thread-title">%s</div>`, html.EscapeString(thread.header))
+		if len(thread.frames) > 0 || len(thread.extra) > 0 {
+			_, _ = io.WriteString(w, `<div class="thread-stack">`)
+			for _, frame := range thread.frames {
+				_, _ = fmt.Fprintf(w, `<div class="frame">%s</div>`, formatStackFrameHTML(frame))
+			}
+			for _, detail := range thread.extra {
+				_, _ = fmt.Fprintf(w, `<div class="thread-extra">%s</div>`, html.EscapeString(detail))
+			}
+			_, _ = io.WriteString(w, `</div>`)
+		}
+		_, _ = io.WriteString(w, `</div>`)
+	}
+
+	if len(misc) > 0 {
+		_, _ = io.WriteString(w, `<h2>Other Output</h2>`)
+		_, _ = fmt.Fprintf(w, `<pre class="misc">%s</pre>`, html.EscapeString(strings.Join(misc, "\n")))
+	}
+
+	stderrTrimmed := strings.TrimSpace(stderrOutput)
+	if stderrTrimmed != "" {
+		_, _ = io.WriteString(w, `<h2>netcoredbg stderr</h2>`)
+		_, _ = fmt.Fprintf(w, `<pre class="stderr">%s</pre>`, html.EscapeString(stderrTrimmed))
+	}
+
+	if runErr != nil {
+		_, _ = fmt.Fprintf(w, `<div class="error">stack command error: %s</div>`, html.EscapeString(runErr.Error()))
+	}
+
+	_, _ = io.WriteString(w, `</div></body></html>`)
+}
+
+func formatStackFrameHTML(frame string) string {
+	line := strings.TrimSpace(frame)
+	if !strings.HasPrefix(line, "#") {
+		return html.EscapeString(line)
+	}
+	colon := strings.Index(line, ":")
+	if colon < 0 {
+		return html.EscapeString(line)
+	}
+
+	indexPart := strings.TrimSpace(line[:colon+1])
+	rest := strings.TrimSpace(line[colon+1:])
+	if rest == "" {
+		return fmt.Sprintf(`<span class="frame-idx">%s</span>`, html.EscapeString(indexPart))
+	}
+
+	addrPart := ""
+	if field := strings.Fields(rest); len(field) > 0 && strings.HasPrefix(field[0], "0x") {
+		addrPart = field[0]
+		rest = strings.TrimSpace(rest[len(field[0]):])
+	}
+
+	symbolPart := rest
+	sourcePart := ""
+	if at := strings.LastIndex(rest, " at "); at >= 0 {
+		symbolPart = strings.TrimSpace(rest[:at])
+		sourcePart = strings.TrimSpace(rest[at+4:])
+	}
+
+	dllPart := ""
+	funcPart := symbolPart
+	if sep := strings.Index(symbolPart, "`"); sep >= 0 {
+		dllPart = strings.TrimSpace(symbolPart[:sep])
+		funcPart = strings.TrimSpace(symbolPart[sep+1:])
+	}
+
+	sourcePath := ""
+	sourceFile := ""
+	if sourcePart != "" {
+		slash := strings.LastIndex(sourcePart, "/")
+		if slash < 0 {
+			slash = strings.LastIndex(sourcePart, `\`)
+		}
+		if slash >= 0 {
+			sourcePath = sourcePart[:slash+1]
+			sourceFile = sourcePart[slash+1:]
+		} else {
+			sourceFile = sourcePart
+		}
+	}
+
+	var b strings.Builder
+	b.WriteString(`<span class="frame-idx">`)
+	b.WriteString(html.EscapeString(indexPart))
+	b.WriteString(`</span>`)
+
+	if addrPart != "" {
+		b.WriteString(` <span class="frame-ptr">`)
+		b.WriteString(html.EscapeString(addrPart))
+		b.WriteString(`</span>`)
+	}
+
+	if dllPart != "" {
+		b.WriteString(` <span class="frame-dll">`)
+		b.WriteString(html.EscapeString(dllPart))
+		b.WriteString(`</span><span class="frame-sep">` + html.EscapeString("`") + `</span>`)
+	}
+
+	if funcPart != "" {
+		b.WriteString(` <span class="frame-func">`)
+		b.WriteString(html.EscapeString(funcPart))
+		b.WriteString(`</span>`)
+	}
+
+	if sourcePart != "" {
+		b.WriteString(` <span class="frame-at">at</span> `)
+		if sourcePath != "" {
+			b.WriteString(`<span class="frame-path">`)
+			b.WriteString(html.EscapeString(sourcePath))
+			b.WriteString(`</span>`)
+		}
+		b.WriteString(`<span class="frame-file">`)
+		b.WriteString(html.EscapeString(sourceFile))
+		b.WriteString(`</span>`)
+	}
+
+	return b.String()
 }
 
 func (h *AdminHandler) handleTrace(w http.ResponseWriter, r *http.Request) {

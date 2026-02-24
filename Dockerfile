@@ -1,3 +1,19 @@
+FROM golang:1.26 AS debugadmin_builder
+
+WORKDIR /src
+COPY go.mod ./
+COPY main.go ./
+COPY internal ./internal
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends wget unzip \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p build \
+ && wget -O ./build/speedscope-1.24.0.zip https://github.com/jlfwong/speedscope/releases/download/v1.24.0/speedscope-1.24.0.zip \
+ && unzip -oq ./build/speedscope-1.24.0.zip -d ./build \
+ && go build -o /out/DebugAdmin ./main.go
+
+
 FROM linuxserver/code-server:latest
 
 ARG DOTNET_VERSION=6.0
@@ -20,6 +36,8 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 USER root
+
+COPY --from=debugadmin_builder /out/DebugAdmin /usr/bin/DebugAdmin
 
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
     chmod +x dotnet-install.sh && \

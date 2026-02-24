@@ -19,13 +19,13 @@ A all-in-one docker image for online debug your C# backend server.
 
 同时开发一个 golang http server 来做管理接口:
 * 启动进程功能
-  - 直接启动
+  - 直接启动 ✅
   - 调试器启动
 * trace 采样功能
-  - 指定采样 n 秒
-  - 使用内置的 speedscope 展示火焰图  
+  - 指定采样 n 秒 ✅
+  - 使用内置的 speedscope 展示火焰图   ✅
 * 查看堆栈功能
-  - 使用 netcoredbg 挂载进程，并且展示堆栈
+  - 使用 netcoredbg 挂载进程，并且展示堆栈 ✅
 * web 调试器功能：
   - 创建 netcoredbg 进程，然后通过 stdin / stdout 来通讯，可以通过浏览器进行更友好更好用的单步调试
 * 日志 push 功能
@@ -36,3 +36,40 @@ A all-in-one docker image for online debug your C# backend server.
   - 内置 wrk / nghttp，可以直接开启压测
 * CodeServer 功能
   - 如果指定源码目录，可以通过 code server 浏览和编辑源码  
+
+# How to use
+
+* Build your C# backend
+
+```bash
+dotnet build xxx.csprog -c Debug \
+  -p:DebugType=portable \
+  -p:DebugSymbols=true \
+  -p:EmbedUntrackedSources=true \
+  -p:EmbedAllSources=true \
+  -p:ContinuousIntegrationBuild=true \
+  -p:Optimize=false
+```
+
+* Run in docker
+
+```bash
+docker run -it --rm --name=csharp_debug_admin_test \
+	--platform linux/amd64 \
+	--network="host" \
+	--cpuset-cpus="2" \
+	-m 512m \
+	-v "/home/ahfu/code/MyProj/bin/Debug/net6.0/":/app/ \
+	-w /app/ \
+	-e ASPNETCORE_ENVIRONMENT=Local \
+	-e ASPNETCORE_URLS=http://localhost:5190 \
+	csharp-dbg-all-in-one:dotnet6 \
+		/usr/bin/DebugAdmin -admin.port=8089 -startup="/app/MyProj.dll -param1=1"
+
+```
+
+* Use browser
+
+visit: http://${your-server}:8089/
+
+

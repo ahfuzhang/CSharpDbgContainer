@@ -37,7 +37,7 @@ func Run(staticFS fs.FS) int {
 		_, _ = fmt.Fprintf(os.Stderr, "create http server failed: %v\n", err)
 		return 1
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "DebugAdmin listening on http://127.0.0.1:%d\n", options.AdminPort)
+	_, _ = fmt.Fprintf(os.Stdout, "DebugAdmin listening on http://:%d\n", options.AdminPort)
 	serverErrCh := make(chan error, 1)
 	go func() {
 		serverErrCh <- server.ListenAndServe()
