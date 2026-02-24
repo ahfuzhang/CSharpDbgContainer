@@ -82,7 +82,7 @@ visit: `http://${your-server}:8089/`
 * web 调试器功能：
   - 创建 netcoredbg 进程，然后通过 stdin / stdout 来通讯，可以通过浏览器进行更友好更好用的单步调试
 * 日志 push 功能
-  - 可以选择把 stdout 的日志，直接推送到 VictoriaLogs
+  - 可以选择把 stdout 的日志，直接推送到 VictoriaLogs ✅
 * metrics push 功能
   - 可以选择把 metrics 数据 push 到 VictoriaMetrics
 * 压测功能

@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -24,24 +25,26 @@ const traceIDLayout = "20060102150405.000"
 var traceIDPattern = regexp.MustCompile(`^\d{14}\.\d{3}$`)
 
 type AdminHandler struct {
-	traces      *TraceStore
-	broker      *LogBroker
-	target      *TargetProcess
-	speedscope  fs.FS
-	targetLabel string
+	traces             *TraceStore
+	broker             *LogBroker
+	target             *TargetProcess
+	speedscope         fs.FS
+	vectorTOMLTemplate *template.Template
+	targetLabel        string
 }
 
-func NewHTTPServer(options Options, staticFS fs.FS, broker *LogBroker, target *TargetProcess) (*http.Server, error) {
+func NewHTTPServer(options Options, staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess) (*http.Server, error) {
 	speedscopeFS, err := fs.Sub(staticFS, "build/speedscope")
 	if err != nil {
 		return nil, fmt.Errorf("load embedded speedscope files: %w", err)
 	}
 	handler := &AdminHandler{
-		traces:      NewTraceStore(),
-		broker:      broker,
-		target:      target,
-		speedscope:  speedscopeFS,
-		targetLabel: options.Startup,
+		traces:             NewTraceStore(),
+		broker:             broker,
+		target:             target,
+		speedscope:         speedscopeFS,
+		vectorTOMLTemplate: vectorTOMLTemplate,
+		targetLabel:        options.Startup,
 	}
 	mux := http.NewServeMux()
 	handler.Register(mux)
@@ -56,6 +59,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/log", h.handleLog)
 	mux.HandleFunc("/stack", h.handleStack)
 	mux.HandleFunc("/trace", h.handleTrace)
+	mux.HandleFunc("/profile_list", h.handleProfileList)
 	mux.HandleFunc("/profile/", h.handleProfile)
 	mux.Handle("/speedscope/", http.StripPrefix("/speedscope/", http.FileServer(http.FS(h.speedscope))))
 }
@@ -63,10 +67,11 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Add("Content-Type", "text/html")
 	_, _ = fmt.Fprintf(w, "DebugAdmin target=%s pid=%d<br/>\n", h.targetLabel, h.target.PID())
-	_, _ = io.WriteString(w, "GET /log\n<br/>GET /stack\n<br/>GET /trace?seconds=10\n<br/>GET /speedscope/\n<br/>")
+	_, _ = io.WriteString(w, "GET /log\n<br/>GET /stack\n<br/>GET /trace?seconds=10\n<br/>GET /profile_list\n<br/>GET /speedscope/\n<br/>")
 	_, _ = fmt.Fprintf(w, `
 		<a href="/log" target="_blank">show log</a><br/>
 		<a href="/stack" target="_blank">show stack</a><br/>
+		<a href="/profile_list" target="_blank">show profile list</a><br/>
 		Trace <input type="text" size=4 value=10 id="seconds"/> seconds, then <input type="button" value="Show Profile" onclick="profile()"/><br/>
 		<script>
 		function profile(){
@@ -592,6 +597,30 @@ func parseTraceSeconds(r *http.Request) (int, error) {
 		return 0, fmt.Errorf("seconds must be between 1 and 30")
 	}
 	return seconds, nil
+}
+
+func (h *AdminHandler) handleProfileList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	traceIDs := h.traces.List()
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_, _ = io.WriteString(w, "<!doctype html><html><head><meta charset=\"utf-8\"><title>Profile List</title></head><body>\n")
+	_, _ = io.WriteString(w, "<h3>Profile List</h3>\n")
+	if len(traceIDs) == 0 {
+		_, _ = io.WriteString(w, "<div>no profiles</div>\n")
+		_, _ = io.WriteString(w, "</body></html>")
+		return
+	}
+	for i := len(traceIDs) - 1; i >= 0; i-- {
+		traceID := traceIDs[i]
+		speedscopeURL := "/speedscope/index.html#profileURL=/profile/" + traceID + ".speedscope.json"
+		_, _ = fmt.Fprintf(w, "<div><a href=%q target=\"_blank\" rel=\"noopener\">%s.speedscope.json</a></div>\n", speedscopeURL, html.EscapeString(traceID))
+	}
+	_, _ = io.WriteString(w, "</body></html>")
 }
 
 func (h *AdminHandler) handleProfile(w http.ResponseWriter, r *http.Request) {

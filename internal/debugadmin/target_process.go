@@ -6,16 +6,22 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 )
 
 type TargetProcess struct {
-	pid    int
-	cmd    *exec.Cmd
-	broker *LogBroker
-	done   chan error
+	pid           int
+	cmd           *exec.Cmd
+	broker        *LogBroker
+	done          chan error
+	stdoutWriter  io.Writer
+	stderrWriter  io.Writer
+	lineWriter    io.Writer
+	lineWriterMu  sync.Mutex
+	lineWriteDead bool
 }
 
-func StartTarget(startup string, broker *LogBroker) (*TargetProcess, error) {
+func StartTarget(startup string, broker *LogBroker, lineWriter io.Writer, logStdoutOutput bool) (*TargetProcess, error) {
 	cmd, err := BuildStartupCommand(startup)
 	if err != nil {
 		return nil, err
@@ -34,13 +40,18 @@ func StartTarget(startup string, broker *LogBroker) (*TargetProcess, error) {
 	}
 
 	target := &TargetProcess{
-		pid:    cmd.Process.Pid,
-		cmd:    cmd,
-		broker: broker,
-		done:   make(chan error, 1),
+		pid:        cmd.Process.Pid,
+		cmd:        cmd,
+		broker:     broker,
+		done:       make(chan error, 1),
+		lineWriter: lineWriter,
 	}
-	go target.consumeOutput(stdoutPipe)
-	go target.consumeOutput(stderrPipe)
+	if logStdoutOutput {
+		target.stdoutWriter = os.Stdout
+		target.stderrWriter = os.Stderr
+	}
+	go target.consumeOutput(stdoutPipe, target.stdoutWriter)
+	go target.consumeOutput(stderrPipe, target.stderrWriter)
 	go target.waitForExit()
 	return target, nil
 }
@@ -53,7 +64,7 @@ func (p *TargetProcess) Done() <-chan error {
 	return p.done
 }
 
-func (p *TargetProcess) consumeOutput(reader io.ReadCloser) {
+func (p *TargetProcess) consumeOutput(reader io.ReadCloser, localWriter io.Writer) {
 	defer reader.Close()
 
 	scanner := bufio.NewScanner(reader)
@@ -61,8 +72,11 @@ func (p *TargetProcess) consumeOutput(reader io.ReadCloser) {
 	scanner.Buffer(buf, 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text() + "\n"
-		_, _ = os.Stdout.WriteString(line)
+		if localWriter != nil {
+			_, _ = io.WriteString(localWriter, line)
+		}
 		p.broker.Broadcast(line)
+		p.writeLineToVector(line)
 	}
 	if err := scanner.Err(); err != nil {
 		message := fmt.Sprintf("[log stream error] %v\n", err)
@@ -78,4 +92,18 @@ func (p *TargetProcess) waitForExit() {
 	p.broker.Broadcast(message)
 	p.done <- err
 	close(p.done)
+}
+
+func (p *TargetProcess) writeLineToVector(line string) {
+	p.lineWriterMu.Lock()
+	defer p.lineWriterMu.Unlock()
+	if p.lineWriter == nil || p.lineWriteDead {
+		return
+	}
+	if _, err := io.WriteString(p.lineWriter, line); err != nil {
+		p.lineWriteDead = true
+		message := fmt.Sprintf("[vector stdin write failed] %v\n", err)
+		_, _ = os.Stdout.WriteString(message)
+		p.broker.Broadcast(message)
+	}
 }

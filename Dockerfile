@@ -4,6 +4,7 @@ WORKDIR /src
 COPY go.mod ./
 COPY main.go ./
 COPY internal ./internal
+COPY logging ./logging
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends wget unzip \
@@ -57,6 +58,10 @@ RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
       *)   dotnet_trace_version="" ;; \
     esac && \
     /usr/share/dotnet/dotnet tool install dotnet-trace ${dotnet_trace_version} --tool-path /usr/bin/dotnetsdk/ && \
+    echo "install vector:============================" && \
+    wget https://github.com/vectordotdev/vector/releases/download/v0.53.0/vector-0.53.0-x86_64-unknown-linux-gnu.tar.gz && \
+    tar -zxf vector-0.53.0-x86_64-unknown-linux-gnu.tar.gz && \
+    cp vector-x86_64-unknown-linux-gnu/bin/vector /usr/bin/ && \
     echo "install vscode extension:============================" && \
     export EXTENSIONS_GALLERY='{"serviceUrl":"https://marketplace.visualstudio.com/_apis/public/gallery"}' \
     && mkdir -p /config/extensions \

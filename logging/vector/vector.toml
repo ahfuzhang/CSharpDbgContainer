@@ -1,0 +1,35 @@
+# vector.toml
+
+# 1) Source: 从标准输入读取（你把别的进程 stdout pipe 进来）
+#    例： your_app 2>&1 | vector -c vector.toml
+[sources.stdin]
+type = "stdin"
+
+# 可选：指定编码/行分隔等（一般不需要）
+# encoding.charset = "utf-8"
+
+# 2) Transform: 把整行内容放到 .message（可选，但很常用）
+[transforms.parse]
+type = "remap"
+inputs = ["stdin"]
+source = '''
+log_json,err = parse_json(.message)
+if err != null {
+	abort
+}
+. = log_json
+
+if !exists(.Message) {
+    .Message = " "
+}
+'''
+
+[sinks.jsonline_http]
+type = "http"
+inputs = ["parse"]
+uri = "{{ .URL }}"
+method = "post"
+encoding.codec = "json"
+request.retry_attempts = 0
+request.compression = "zstd"
+framing.method = "newline_delimited"

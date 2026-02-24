@@ -30,3 +30,11 @@ func (s *TraceStore) Exists(traceID string) bool {
 	s.mu.RUnlock()
 	return ok
 }
+
+func (s *TraceStore) List() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	items := make([]string, len(s.order))
+	copy(items, s.order)
+	return items
+}
