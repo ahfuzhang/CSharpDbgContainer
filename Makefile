@@ -5,7 +5,7 @@
 docker-build:
 	docker build --platform linux/amd64 \
 	  --build-arg DOTNET_VERSION=$(ver) \
-	  -t csharp-dbg-all-in-one:dotnet$(word 1,$(subst ., ,$(ver))) -f ./Dockerfile .
+	  -t ahfuzhang/csharp-dbg-all-in-one:dotnet$(word 1,$(subst ., ,$(ver))) -f ./Dockerfile .
 
 ./build/speedscope/.unpacked: ./build/speedscope-1.24.0.zip
 	mkdir -p build
@@ -44,7 +44,7 @@ run-in-docker:
 	-v "/Users/ahfu/code/github.com/ahfuzhang/QiWa/build/code-snippets/Http1EchoServer/linux/amd64/":/app/ \
 	-v ./build/:/debug_admin/ \
 	-w /app/ \
-	csharp-dbg-all-in-one:dotnet10 \
+	ahfuzhang/csharp-dbg-all-in-one:dotnet10 \
 		/debug_admin/debugadmin-linux-amd64 -startup="/app/Http1EchoServer.dll --http1.port=8081"
 
 .PHONY: build build-linux-amd64 download

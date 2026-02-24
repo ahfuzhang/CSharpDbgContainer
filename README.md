@@ -2,7 +2,60 @@
 <h1>CSharp Debug Container</h1>
 A all-in-one docker image for online debug your C# backend server.
 
+https://hub.docker.com/repository/docker/ahfuzhang/csharp-dbg-all-in-one/general
+
 <h1><font color=red>Never use it in your production environment.</font></h1>
+
+# How to use
+
+* Build your C# backend
+
+```bash
+dotnet build xxx.csproj -c Debug \
+  -p:DebugType=portable \
+  -p:DebugSymbols=true \
+  -p:EmbedUntrackedSources=true \
+  -p:EmbedAllSources=true \
+  -p:ContinuousIntegrationBuild=true \
+  -p:Optimize=false
+```
+
+* Run in docker
+
+```bash
+docker run -it --rm --name=csharp_debug_admin_test \
+	--platform linux/amd64 \
+	--network="host" \
+	--cpuset-cpus="2" \
+	-m 512m \
+	-v "/home/ahfu/code/MyProj/bin/Debug/net6.0/":/app/ \
+	-w /app/ \
+	-e ASPNETCORE_ENVIRONMENT=Local \
+	-e ASPNETCORE_URLS=http://localhost:5190 \
+	ahfuzhang/csharp-dbg-all-in-one:dotnet6 \
+		/usr/bin/DebugAdmin -admin.port=8089 -startup="/app/MyProj.dll -param1=1"
+
+```
+
+* Use browser
+
+visit: `http://${your-server}:8089/`
+
+1. main page
+
+![](./doc/images/webui_1.png)
+
+2. Show Stack information:
+
+![](./doc/images/webui_stack_info.png)
+
+3. Use `dotnet-trace` to collect cpu profile
+
+![](./doc/images/webui_trace_1.png)
+
+4. After trace, we will see the CPU profiling info.
+
+![](./doc/images/webui_trace_2.png)
 
 # [WIP]
 
@@ -36,40 +89,3 @@ A all-in-one docker image for online debug your C# backend server.
   - 内置 wrk / nghttp，可以直接开启压测
 * CodeServer 功能
   - 如果指定源码目录，可以通过 code server 浏览和编辑源码  
-
-# How to use
-
-* Build your C# backend
-
-```bash
-dotnet build xxx.csprog -c Debug \
-  -p:DebugType=portable \
-  -p:DebugSymbols=true \
-  -p:EmbedUntrackedSources=true \
-  -p:EmbedAllSources=true \
-  -p:ContinuousIntegrationBuild=true \
-  -p:Optimize=false
-```
-
-* Run in docker
-
-```bash
-docker run -it --rm --name=csharp_debug_admin_test \
-	--platform linux/amd64 \
-	--network="host" \
-	--cpuset-cpus="2" \
-	-m 512m \
-	-v "/home/ahfu/code/MyProj/bin/Debug/net6.0/":/app/ \
-	-w /app/ \
-	-e ASPNETCORE_ENVIRONMENT=Local \
-	-e ASPNETCORE_URLS=http://localhost:5190 \
-	csharp-dbg-all-in-one:dotnet6 \
-		/usr/bin/DebugAdmin -admin.port=8089 -startup="/app/MyProj.dll -param1=1"
-
-```
-
-* Use browser
-
-visit: http://${your-server}:8089/
-
-

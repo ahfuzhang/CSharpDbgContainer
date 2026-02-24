@@ -11,7 +11,7 @@ RUN apt-get update \
  && mkdir -p build \
  && wget -O ./build/speedscope-1.24.0.zip https://github.com/jlfwong/speedscope/releases/download/v1.24.0/speedscope-1.24.0.zip \
  && unzip -oq ./build/speedscope-1.24.0.zip -d ./build \
- && go build -o /out/DebugAdmin ./main.go
+ && GOOS=linux GOARCH=amd64 go build -o /out/DebugAdmin ./main.go
 
 
 FROM linuxserver/code-server:latest
