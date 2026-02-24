@@ -1,0 +1,5 @@
+# default config file for CodeServer
+bind-addr: 127.0.0.1:8080
+auth: password
+password: 52ab21118d9f26694828eac6
+cert: false
