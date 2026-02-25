@@ -157,14 +157,16 @@ public class Program
         });
     }
 
+    const string defaultPath = "/tmp";
+
     private static void MapTraceMe(WebApplication app, ConcurrentDictionary<string, string> traceFiles)
     {
         app.MapGet("/traceme", async context =>
         {
             var seconds = ParseSeconds(context.Request.Query["seconds"]);
-            var traceName = DateTime.Now.ToString("yyyyMMddHHmmss.fff");
-            var outputTracePath = $"/app/{traceName}";
-            var speedscopePath = $"/app/{traceName}.speedscope.json";
+            var traceName = DateTime.Now.ToString("yyyyMMddHHmmss_fff");
+            var outputTracePath = $"{defaultPath}/{traceName}";
+            var speedscopePath = $"{defaultPath}/{traceName}.speedscope.json";
             traceFiles[traceName] = speedscopePath;
 
             context.Response.Headers.CacheControl = "no-store";
@@ -181,109 +183,56 @@ public class Program
                 "function appendLog(t){if(t){l.textContent+=(t+'\\n');}}" +
                 "</script>");
 
-            var lastResult = TraceCollectResult.StartFailure("cannot start dotnet-trace");
-            var profileCandidates = GetTraceProfileCandidates();
-            for (var i = 0; i < profileCandidates.Length; i++)
+            var commandArgs = BuildCollectCommandArgs(seconds, Environment.ProcessId, outputTracePath);
+
+            TraceCollectResult collectResult;
+            try
             {
-                var profile = profileCandidates[i];
-                var commandArgs = BuildCollectCommandArgs(profile, seconds, Environment.ProcessId, outputTracePath);
+                collectResult = await RunTraceCollect(context, commandArgs, seconds, true);
+            }
+            catch (OperationCanceledException)
+            {
+                traceFiles.TryRemove(traceName, out _);
+                return;
+            }
 
-                TraceCollectResult collectResult;
-                try
-                {
-                    collectResult = await RunTraceCollect(context, commandArgs, seconds, i == 0);
-                }
-                catch (OperationCanceledException)
-                {
-                    traceFiles.TryRemove(traceName, out _);
-                    return;
-                }
-
-                if (!collectResult.Started)
-                {
-                    traceFiles.TryRemove(traceName, out _);
-                    await WriteHtmlChunk(context, $"<script>setStatus({ToJs($"failed: {collectResult.StartError}")});</script>");
-                    return;
-                }
-
-                lastResult = collectResult;
-                if (collectResult.ExitCode == 0 && File.Exists(speedscopePath))
-                {
-                    var redirect = $"/speedscope/index.html#profileURL=/profile/{traceName}.json";
-                    await WriteHtmlChunk(context, $"<script>setStatus('done, redirecting...');location.href={ToJs(redirect)};</script>");
-                    return;
-                }
-
-                var canRetryWithNextProfile = i + 1 < profileCandidates.Length
-                    && IsUnsupportedProfileError(collectResult.Stdout, collectResult.Stderr);
-                if (canRetryWithNextProfile)
-                {
-                    var nextProfile = profileCandidates[i + 1];
-                    await WriteHtmlChunk(
-                        context,
-                        $"<script>appendLog({ToJs($"profile '{profile}' not supported by this dotnet-trace, retrying with '{nextProfile}'")});</script>");
-                    continue;
-                }
-
-                break;
+            if (!collectResult.Started)
+            {
+                traceFiles.TryRemove(traceName, out _);
+                await WriteHtmlChunk(context, $"<script>setStatus({ToJs($"failed: {collectResult.StartError}")});</script>");
+                return;
+            }
+            if (collectResult.ExitCode != 0){
+                await WriteHtmlChunk(context, $"<script>setStatus('exit code:{collectResult.ExitCode}');</script>");
+                return;
+            }
+            if (!File.Exists(speedscopePath)){
+                await WriteHtmlChunk(context, $"<script>setStatus('not exists:{speedscopePath}');</script>");
+                return;
+            }
+            if (collectResult.ExitCode == 0 && File.Exists(speedscopePath))
+            {
+                var redirect = $"/speedscope/index.html#profileURL=/profile/{traceName}.speedscope.json";
+                await WriteHtmlChunk(context, $"<script>setStatus('done, redirecting...');location.href={ToJs(redirect)};</script>");
+                return;
             }
 
             traceFiles.TryRemove(traceName, out _);
             await WriteHtmlChunk(
                 context,
-                $"<script>setStatus({ToJs($"trace failed, exit code: {lastResult.ExitCode}")});</script>");
+                $"<script>setStatus({ToJs($"trace failed, exit code: {collectResult.ExitCode}")});</script>");
             return;
         });
     }
 
     private static void MapProfile(WebApplication app, ConcurrentDictionary<string, string> traceFiles)
     {
-        var namePattern = new Regex("^\\d{14}\\.\\d{3}$", RegexOptions.Compiled);
 
-        app.MapGet("/profile/{name}.json", async (HttpContext context, string name) =>
+        app.MapGet("/profile/{name}", async (HttpContext context, string name) =>
         {
-            if (!namePattern.IsMatch(name))
-            {
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                await context.Response.WriteAsync("invalid profile name", context.RequestAborted);
-                return;
-            }
-
-            if (!TryResolveProfileFilePath(name, traceFiles, out var filePath))
-            {
-                context.Response.StatusCode = StatusCodes.Status404NotFound;
-                await context.Response.WriteAsync("profile not found", context.RequestAborted);
-                return;
-            }
-
             context.Response.ContentType = "application/json; charset=utf-8";
-            await context.Response.SendFileAsync(filePath, context.RequestAborted);
+            await context.Response.SendFileAsync($"{defaultPath}/{name}", context.RequestAborted);
         });
-    }
-
-    private static bool TryResolveProfileFilePath(
-        string name,
-        ConcurrentDictionary<string, string> traceFiles,
-        out string filePath)
-    {
-        if (traceFiles.TryGetValue(name, out var mappedPath)
-            && !string.IsNullOrWhiteSpace(mappedPath)
-            && File.Exists(mappedPath))
-        {
-            filePath = mappedPath;
-            return true;
-        }
-
-        var fallbackPath = $"/app/{name}.speedscope.json";
-        if (!File.Exists(fallbackPath))
-        {
-            filePath = string.Empty;
-            return false;
-        }
-
-        traceFiles[name] = fallbackPath;
-        filePath = fallbackPath;
-        return true;
     }
 
     private static int ParseSeconds(string? secondsRaw)
@@ -297,31 +246,10 @@ public class Program
         return Math.Clamp(seconds, 1, 30);
     }
 
-    private static string[] GetTraceProfileCandidates()
-    {
-        return OperatingSystem.IsLinux()
-            ? ["dotnet-sampled-thread-time", "cpu-sampling"]
-            : ["dotnet-sampled-thread-time"];
-    }
-
-    private static string BuildCollectCommandArgs(string profile, int seconds, int processId, string outputTracePath)
+    private static string BuildCollectCommandArgs(int seconds, int processId, string outputTracePath)
     {
         return
-            $"collect --profile {profile} --duration 00:00:{seconds:00} --format Speedscope -p {processId} -o {outputTracePath}";
-    }
-
-    private static bool IsUnsupportedProfileError(string stdout, string stderr)
-    {
-        var output = $"{stdout}\n{stderr}";
-        if (string.IsNullOrWhiteSpace(output))
-        {
-            return false;
-        }
-
-        return output.Contains("specified profile", StringComparison.OrdinalIgnoreCase)
-            || output.Contains("does not apply to `dotnet-trace collect`", StringComparison.OrdinalIgnoreCase)
-            || output.Contains("unknown profile", StringComparison.OrdinalIgnoreCase)
-            || output.Contains("unrecognized profile", StringComparison.OrdinalIgnoreCase);
+            $"collect --profile dotnet-sampled-thread-time --duration 00:00:{seconds:00} --format Speedscope -p {processId} -o {outputTracePath}";
     }
 
     private static async Task<TraceCollectResult> RunTraceCollect(

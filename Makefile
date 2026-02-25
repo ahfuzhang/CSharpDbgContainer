@@ -2,7 +2,7 @@
 # make docker-build ver=6.0
 # make docker-build ver=8.0
 # make docker-build ver=10.0
-DOTNET8_DOCKER_IMAGE ?= ahfuzhang/csharp-dbg-all-in-one:dotnet8
+DOTNET_DOCKER_IMAGE ?= ahfuzhang/csharp-dbg-all-in-one:dotnet10
 TRACEME_RUNTIME ?= linux-x64
 TRACEME_OUTPUT_DIR ?= ./build/examples/TraceMe/linux/amd64/
 
@@ -55,9 +55,11 @@ build-example-traceme: download
 ifeq ($(shell uname -s),Linux)
 	dotnet publish ./examples/TraceMe/TraceMe.csproj \
 		-c Release -r $(TRACEME_RUNTIME) \
-		-p:PublishAot=true \
+		-p:PublishAot=false \
 		-p:StripSymbols=false \
-		--self-contained true \
+		-p:EventSourceSupport=true \
+		-p:PublishReadyToRun=true \
+		--self-contained false \
 		-o $(TRACEME_OUTPUT_DIR)
 else
 	docker run --rm --platform linux/amd64 \
@@ -67,25 +69,51 @@ else
 		-e NUGET_PACKAGES=/tmp/.nuget/packages \
 		-v "$(CURDIR)":/work \
 		-w /work \
-		$(DOTNET8_DOCKER_IMAGE) \
+		$(DOTNET_DOCKER_IMAGE) \
 		dotnet publish ./examples/TraceMe/TraceMe.csproj \
 			-c Release -r $(TRACEME_RUNTIME) \
-			-p:PublishAot=true \
+			-p:PublishAot=false \
 			-p:StripSymbols=false \
-			--self-contained true \
+			-p:EventSourceSupport=true \
+			-p:PublishReadyToRun=true \
+			--self-contained false \
 			-o $(TRACEME_OUTPUT_DIR)
 endif
+
+build-example-traceme-on-docker:
+	docker run --rm --platform linux/amd64 \
+		-u $$(id -u):$$(id -g) \
+		-e HOME=/tmp \
+		-e DOTNET_CLI_HOME=/tmp \
+		-e NUGET_PACKAGES=/tmp/.nuget/packages \
+		-v "$(CURDIR)":/work \
+		-w /work \
+		$(DOTNET_DOCKER_IMAGE) \
+		dotnet publish ./examples/TraceMe/TraceMe.csproj \
+			-c Release -r $(TRACEME_RUNTIME) \
+			-p:PublishAot=false \
+			-p:StripSymbols=false \
+			-p:EventSourceSupport=true \
+			-p:PublishReadyToRun=true \
+			--self-contained false \
+			-o $(TRACEME_OUTPUT_DIR)
 
 run-example-traceme:
 	docker run -it --rm --name=csharp_debug_admin_test \
 	--platform linux/amd64 \
+	-u $$(id -u):$$(id -g) \
 	--cpuset-cpus="2" \
 	-m 512m \
 	-p 8089:8089 \
-	-v "$(TRACEME_OUTPUT_DIR)":/app/ \
+	-v "$(TRACEME_OUTPUT_DIR)":/app/:rw \
 	-w /app/ \
-	ahfuzhang/csharp-dbg-all-in-one:dotnet8 \
+	$(DOTNET_DOCKER_IMAGE) \
 		/app/TraceMe -port=8089 -cores=1
+
+run-example-traceme-direct:
+	dotnet run --project ./examples/TraceMe/TraceMe.csproj -port=8089 -cores=1
+	# ./build/examples/TraceMe/linux/amd64/TraceMe -port=8089 -cores=1
+
 
 .PHONY: build build-linux-amd64 download build-example-traceme
 
