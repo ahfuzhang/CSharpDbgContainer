@@ -207,7 +207,7 @@ func collectStackOutput(ctx context.Context, pid int) (string, string, string, e
 
 	var runErr error
 	if commandIssued {
-		if _, err := io.WriteString(stdinPipe, "bt all\n"); err != nil && runErr == nil {
+		if _, err := io.WriteString(stdinPipe, "bt all\n"); err != nil {
 			runErr = fmt.Errorf("send bt all command failed: %w", err)
 		}
 	}

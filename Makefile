@@ -2,6 +2,10 @@
 # make docker-build ver=6.0
 # make docker-build ver=8.0
 # make docker-build ver=10.0
+DOTNET8_DOCKER_IMAGE ?= ahfuzhang/csharp-dbg-all-in-one:dotnet8
+TRACEME_RUNTIME ?= linux-x64
+TRACEME_OUTPUT_DIR ?= ./build/examples/TraceMe/linux/amd64/
+
 docker-build:
 	docker build --platform linux/amd64 \
 	  --build-arg DOTNET_VERSION=$(ver) \
@@ -47,4 +51,44 @@ run-in-docker:
 	ahfuzhang/csharp-dbg-all-in-one:dotnet10 \
 		/debug_admin/debugadmin-linux-amd64 -startup="/app/Http1EchoServer.dll --http1.port=8081"
 
-.PHONY: build build-linux-amd64 download
+build-example-traceme: download
+ifeq ($(shell uname -s),Linux)
+	dotnet publish ./examples/TraceMe/TraceMe.csproj \
+		-c Release -r $(TRACEME_RUNTIME) \
+		-p:PublishAot=true \
+		-p:StripSymbols=false \
+		--self-contained true \
+		-o $(TRACEME_OUTPUT_DIR)
+else
+	docker run --rm --platform linux/amd64 \
+		-u $$(id -u):$$(id -g) \
+		-e HOME=/tmp \
+		-e DOTNET_CLI_HOME=/tmp \
+		-e NUGET_PACKAGES=/tmp/.nuget/packages \
+		-v "$(CURDIR)":/work \
+		-w /work \
+		$(DOTNET8_DOCKER_IMAGE) \
+		dotnet publish ./examples/TraceMe/TraceMe.csproj \
+			-c Release -r $(TRACEME_RUNTIME) \
+			-p:PublishAot=true \
+			-p:StripSymbols=false \
+			--self-contained true \
+			-o $(TRACEME_OUTPUT_DIR)
+endif
+
+run-example-traceme:
+	docker run -it --rm --name=csharp_debug_admin_test \
+	--platform linux/amd64 \
+	--cpuset-cpus="2" \
+	-m 512m \
+	-p 8089:8089 \
+	-v "$(TRACEME_OUTPUT_DIR)":/app/ \
+	-w /app/ \
+	ahfuzhang/csharp-dbg-all-in-one:dotnet8 \
+		/app/TraceMe -port=8089 -cores=1
+
+.PHONY: build build-linux-amd64 download build-example-traceme
+
+
+wrk:
+	wrk -c 10 -t 1 -d 120s http://127.0.0.1:8089/echo?msg=def --latency
