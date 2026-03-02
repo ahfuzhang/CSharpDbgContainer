@@ -14,7 +14,8 @@ using Microsoft.Extensions.FileProviders;
 
 public class Program
 {
-    private const string TraceOutputDir = "/tmp";
+    //private const string TraceOutputDir = "../../build/examples/TraceMeV2/";
+    private const string TraceOutputDir = "/tmp/";
 
     public static void Main(string[] args)
     {
@@ -278,7 +279,7 @@ public class Program
         var profilePath = Path.Combine(TraceOutputDir, profileFileName);
 
         CollectCpuNettrace(processId, TimeSpan.FromSeconds(seconds), nettracePath);
-        ConvertNettraceToSpeedscope(nettracePath, etlxPath, profilePath, processId);
+        ConvertNettraceToSpeedscope(nettracePath, etlxPath, profilePath);
         TryDeleteFile(nettracePath);
         TryDeleteFile(etlxPath);
 
@@ -311,7 +312,7 @@ public class Program
         }
     }
 
-    private static void ConvertNettraceToSpeedscope(string nettracePath, string etlxPath, string speedscopePath, int processId)
+    private static void ConvertNettraceToSpeedscope(string nettracePath, string etlxPath, string speedscopePath)
     {
         var options = new TraceLogOptions
         {
@@ -326,10 +327,10 @@ public class Program
         };
 
         var stackSource = new MutableTraceEventStackSource(traceLog);
-        var computer = new ThreadTimeStackComputer(traceLog, symbolReader);
-        computer.GenerateThreadTimeStacks(
-            stackSource,
-            traceLog.Events.Filter(e => e.ProcessID == processId));
+        var computer = new SampleProfilerThreadTimeComputer(traceLog, symbolReader);
+        // EventPipe traces from DiagnosticsClient are already scoped to the attached process.
+        // Filtering by Environment.ProcessId can drop all samples when PID namespaces/remapping are involved.
+        computer.GenerateThreadTimeStacks(stackSource, traceLog.Events);
 
         SpeedScopeStackSourceWriter.WriteStackViewAsJson(stackSource, speedscopePath);
     }

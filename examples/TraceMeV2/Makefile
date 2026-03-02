@@ -1,9 +1,11 @@
 PROJECT := TraceMeV2.csproj
 
+DOTNET:=~/.dotnet/dotnet
+
 build:
-	dotnet build $(PROJECT)
+	$(DOTNET) build $(PROJECT)
 
 run:
-	dotnet run --project $(PROJECT) -- -port=8089 -cores=1
+	$(DOTNET) run --project $(PROJECT) -- -port=8089 -cores=1
 
 .PHONY: build run
