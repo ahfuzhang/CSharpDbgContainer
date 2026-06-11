@@ -58,6 +58,8 @@ RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
       *)   dotnet_trace_version="" ;; \
     esac && \
     /usr/share/dotnet/dotnet tool install dotnet-trace ${dotnet_trace_version} --tool-path /usr/bin/dotnetsdk/ && \
+    /usr/share/dotnet/dotnet tool install --global dotnet-coverage --tool-path /usr/bin/dotnetsdk/ && \
+    /usr/share/dotnet/dotnet tool install --global dotnet-reportgenerator-globaltool --tool-path /usr/bin/dotnetsdk/ && \
     echo "install vector:============================" && \
     wget https://github.com/vectordotdev/vector/releases/download/v0.53.0/vector-0.53.0-x86_64-unknown-linux-gnu.tar.gz && \
     tar -zxf vector-0.53.0-x86_64-unknown-linux-gnu.tar.gz && \
