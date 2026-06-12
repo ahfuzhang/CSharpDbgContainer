@@ -120,3 +120,7 @@ run-example-traceme-direct:
 
 wrk:
 	wrk -c 10 -t 1 -d 120s http://127.0.0.1:8089/echo?msg=def --latency
+
+docker_push:
+	docker push ahfuzhang/csharp-dbg-all-in-one:dotnet10
+	
