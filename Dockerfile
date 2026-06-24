@@ -12,7 +12,10 @@ RUN apt-get update \
  && mkdir -p build \
  && wget -O ./build/speedscope-1.24.0.zip https://github.com/jlfwong/speedscope/releases/download/v1.24.0/speedscope-1.24.0.zip \
  && unzip -oq ./build/speedscope-1.24.0.zip -d ./build \
- && GOOS=linux GOARCH=amd64 go build -o /out/DebugAdmin ./main.go
+ && GOOS=linux GOARCH=amd64 go build -o /out/DebugAdmin ./main.go \
+ && wget https://gosspublic.alicdn.com/ossutil/v2/2.3.0/ossutil-2.3.0-linux-amd64.zip \
+ && unzip ossutil-2.3.0-linux-amd64.zip \
+ && cp ossutil-2.3.0-linux-amd64/ossutil /out/ossutil
 
 
 FROM linuxserver/code-server:latest
@@ -38,7 +41,7 @@ RUN apt-get update \
 
 USER root
 
-COPY --from=debugadmin_builder /out/DebugAdmin /usr/bin/DebugAdmin
+COPY --from=debugadmin_builder /out/DebugAdmin /out/ossutil /usr/bin/
 
 RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
     chmod +x dotnet-install.sh && \
