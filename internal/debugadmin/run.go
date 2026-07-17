@@ -15,6 +15,8 @@ import (
 	"strings"
 	"text/template"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -23,11 +25,19 @@ const (
 	vectorCfg   = "/tmp/vector.toml"
 )
 
+// @param staticFS speedscope的 html 静态资源文件夹
+// @param vectorTOMLTemplate logging/vector/vector.toml 的模板文件
 func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 	options, err := loadOptions(configPath, os.Args[1:])
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "parse options failed: %v\n", err)
 		return 2
+	}
+	if options.CoreDumpUnlimited {
+		if err := enableUnlimitedCoreDump(); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "set RLIMIT_CORE to unlimited failed: %v\n", err)
+			return 1
+		}
 	}
 
 	var (
@@ -53,14 +63,16 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 	}
 
 	broker := NewLogBroker()
-	target, err := StartTarget(options.Startup, broker, vectorStdin, options.LogStdoutOutput)
+	history := NewRunHistory()
+	// 创建子进程
+	target, err := StartTarget(options.Startup, broker, vectorStdin, options.LogStdoutOutput, history)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "start target process failed: %v\n", err)
 		return 1
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "target process started, pid=%d\n", target.PID())
 
-	server, err := NewHTTPServer(options, staticFS, vectorTOMLTemplate, broker, target)
+	server, handler, err := NewHTTPServer(options, staticFS, vectorTOMLTemplate, broker, target, history)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "create http server failed: %v\n", err)
 		return 1
@@ -71,23 +83,44 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 		serverErrCh <- server.ListenAndServe()
 	}()
 
-	select {
-	case targetErr := <-target.Done():
-		_, _ = fmt.Fprintf(os.Stdout, "target process finished, DebugAdmin will exit, err=%v\n", targetErr)
+	shutdown := func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 		<-serverErrCh
-		if targetErr != nil {
-			return 1
+	}
+
+	for {
+		select {
+		case targetErr := <-target.Done():
+			_, _, abnormal := classifyExit(targetErr)
+			// 开启 auto.restart 且进程异常退出时，立即重建子进程；正常退出则忽略。
+			if options.AutoRestart && abnormal {
+				_, _ = fmt.Fprintf(os.Stdout, "target process crashed (err=%v), restarting...\n", targetErr)
+				newTarget, restartErr := StartTarget(options.Startup, broker, vectorStdin, options.LogStdoutOutput, history)
+				if restartErr != nil {
+					_, _ = fmt.Fprintf(os.Stderr, "restart target process failed: %v\n", restartErr)
+					shutdown()
+					return 1
+				}
+				target = newTarget
+				handler.SetTarget(newTarget)
+				_, _ = fmt.Fprintf(os.Stdout, "target process restarted, pid=%d\n", target.PID())
+				continue
+			}
+			_, _ = fmt.Fprintf(os.Stdout, "target process finished, DebugAdmin will exit, err=%v\n", targetErr)
+			shutdown()
+			if targetErr != nil {
+				return 1
+			}
+			return 0
+		case serverErr := <-serverErrCh:
+			if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
+				_, _ = fmt.Fprintf(os.Stderr, "http server error: %v\n", serverErr)
+				return 1
+			}
+			return 0
 		}
-		return 0
-	case serverErr := <-serverErrCh:
-		if serverErr != nil && !errors.Is(serverErr, http.ErrServerClosed) {
-			_, _ = fmt.Fprintf(os.Stderr, "http server error: %v\n", serverErr)
-			return 1
-		}
-		return 0
 	}
 }
 
@@ -104,6 +137,8 @@ func loadOptions(configPath string, args []string) (Options, error) {
 	startup := cfg.Startup
 	logPushURL := ""
 	logStdoutOutput := true
+	coreDumpUnlimited := false
+	autoRestart := false
 
 	flagSet := flag.NewFlagSet("DebugAdmin", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
@@ -111,6 +146,8 @@ func loadOptions(configPath string, args []string) (Options, error) {
 	flagSet.StringVar(&startup, "startup", startup, "startup dll or executable")
 	flagSet.StringVar(&logPushURL, "log.push.url", logPushURL, "push logs to remote endpoint URL via vector")
 	flagSet.BoolVar(&logStdoutOutput, "log.stdout.output", logStdoutOutput, "output target process stdout/stderr to DebugAdmin stdout/stderr")
+	flagSet.BoolVar(&coreDumpUnlimited, "coredump.unlimited", coreDumpUnlimited, "set the core dump size limit to unlimited")
+	flagSet.BoolVar(&autoRestart, "auto.restart", autoRestart, "automatically restart the target process when it crashes")
 	if err := flagSet.Parse(args); err != nil {
 		return Options{}, err
 	}
@@ -123,11 +160,21 @@ func loadOptions(configPath string, args []string) (Options, error) {
 	}
 	logPushURL = strings.TrimSpace(logPushURL)
 	return Options{
-		AdminPort:       port,
-		Startup:         startup,
-		LogPushURL:      logPushURL,
-		LogStdoutOutput: logStdoutOutput,
+		AdminPort:         port,
+		Startup:           startup,
+		LogPushURL:        logPushURL,
+		LogStdoutOutput:   logStdoutOutput,
+		CoreDumpUnlimited: coreDumpUnlimited,
+		AutoRestart:       autoRestart,
 	}, nil
+}
+
+func enableUnlimitedCoreDump() error {
+	limit := unix.Rlimit{
+		Cur: unix.RLIM_INFINITY,
+		Max: unix.RLIM_INFINITY,
+	}
+	return unix.Setrlimit(unix.RLIMIT_CORE, &limit)
 }
 
 type VectorProcess struct {

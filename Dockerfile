@@ -36,7 +36,7 @@ ARG EXTENSIONS="\
 
 WORKDIR /tmp/code-server
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates unzip clang lld binutils zlib1g-dev wget make \
+ && apt-get install -y --no-install-recommends curl ca-certificates unzip clang lld binutils zlib1g-dev wget make gdb \
  && rm -rf /var/lib/apt/lists/*
 
 USER root
