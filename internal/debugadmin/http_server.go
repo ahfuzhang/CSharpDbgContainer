@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"text/template"
 	"time"
 )
@@ -27,31 +28,38 @@ var traceIDPattern = regexp.MustCompile(`^\d{14}\.\d{3}$`)
 type AdminHandler struct {
 	traces             *TraceStore
 	broker             *LogBroker
-	target             *TargetProcess
+	target             atomic.Pointer[TargetProcess]
+	history            *RunHistory
 	speedscope         fs.FS
 	vectorTOMLTemplate *template.Template
 	targetLabel        string
 }
 
-func NewHTTPServer(options Options, staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess) (*http.Server, error) {
+func NewHTTPServer(options Options, staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess, history *RunHistory) (*http.Server, *AdminHandler, error) {
 	speedscopeFS, err := fs.Sub(staticFS, "build/speedscope")
 	if err != nil {
-		return nil, fmt.Errorf("load embedded speedscope files: %w", err)
+		return nil, nil, fmt.Errorf("load embedded speedscope files: %w", err)
 	}
 	handler := &AdminHandler{
 		traces:             NewTraceStore(),
 		broker:             broker,
-		target:             target,
+		history:            history,
 		speedscope:         speedscopeFS,
 		vectorTOMLTemplate: vectorTOMLTemplate,
 		targetLabel:        options.Startup,
 	}
+	handler.target.Store(target)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 	return &http.Server{
 		Addr:    fmt.Sprintf(":%d", options.AdminPort),
 		Handler: mux,
-	}, nil
+	}, handler, nil
+}
+
+// SetTarget 在子进程被重启后，切换 AdminHandler 指向的目标进程。
+func (h *AdminHandler) SetTarget(target *TargetProcess) {
+	h.target.Store(target)
 }
 
 func (h *AdminHandler) Register(mux *http.ServeMux) {
@@ -66,7 +74,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 
 func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Add("Content-Type", "text/html")
-	_, _ = fmt.Fprintf(w, "DebugAdmin target=%s pid=%d<br/>\n", h.targetLabel, h.target.PID())
+	_, _ = fmt.Fprintf(w, "DebugAdmin target=%s pid=%d<br/>\n", h.targetLabel, h.target.Load().PID())
 	_, _ = io.WriteString(w, "GET /log\n<br/>GET /stack\n<br/>GET /trace?seconds=10\n<br/>GET /profile_list\n<br/>GET /speedscope/\n<br/>")
 	_, _ = fmt.Fprintf(w, `
 		<a href="/log" target="_blank">show log</a><br/>
@@ -80,6 +88,57 @@ func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
 		}
 		</script>
 	`)
+	h.writeRunHistoryHTML(w)
+}
+
+// writeRunHistoryHTML 展示目标子进程的所有启动记录：启动时间、结束时间、
+// 退出码/信号、是否有 core dump 文件，以及退出前的最后若干行日志。
+func (h *AdminHandler) writeRunHistoryHTML(w io.Writer) {
+	records := h.history.Snapshot()
+	_, _ = io.WriteString(w, `<h3>Run History</h3>`)
+	if len(records) == 0 {
+		_, _ = io.WriteString(w, `<div>no exit records yet</div>`)
+		return
+	}
+	_, _ = io.WriteString(w, `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Consolas,Monaco,monospace;font-size:12px;">`)
+	_, _ = io.WriteString(w, `<tr><th>#</th><th>PID</th><th>Start</th><th>End</th><th>Duration</th><th>Exit</th><th>CoreDump</th><th>Last Logs</th></tr>`)
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		exitDesc := fmt.Sprintf("code=%d", record.ExitCode)
+		if record.Signal != "" {
+			exitDesc += fmt.Sprintf(" signal=%s", record.Signal)
+		}
+		if record.Abnormal {
+			exitDesc = `<span style="color:#b91c1c;font-weight:700;">` + html.EscapeString(exitDesc) + " (abnormal)</span>"
+		} else {
+			exitDesc = `<span style="color:#166534;">` + html.EscapeString(exitDesc) + " (normal)</span>"
+		}
+		coreDump := "-"
+		if record.CoreDumpPath != "" {
+			coreDump = html.EscapeString(record.CoreDumpPath)
+		}
+		lastLogs := "-"
+		if len(record.LastLogs) > 0 {
+			lastLogs = "<pre style=\"margin:0;white-space:pre-wrap;max-height:160px;overflow:auto;\">" +
+				html.EscapeString(strings.Join(record.LastLogs, "\n")) + "</pre>"
+		}
+		errDesc := ""
+		if record.Err != "" {
+			errDesc = "<br/><span style=\"color:#b91c1c;\">" + html.EscapeString(record.Err) + "</span>"
+		}
+		_, _ = fmt.Fprintf(w,
+			`<tr><td>%d</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td>%s</td></tr>`,
+			i+1,
+			record.PID,
+			html.EscapeString(record.StartTime.Format(time.RFC3339)),
+			html.EscapeString(record.EndTime.Format(time.RFC3339)),
+			html.EscapeString(record.EndTime.Sub(record.StartTime).Truncate(time.Millisecond).String()),
+			exitDesc, errDesc,
+			coreDump,
+			lastLogs,
+		)
+	}
+	_, _ = io.WriteString(w, `</table>`)
 }
 
 func (h *AdminHandler) handleLog(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +185,7 @@ func (h *AdminHandler) handleStack(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	startupOutput, stackOutput, stderrOutput, err := collectStackOutput(ctx, h.target.PID())
+	startupOutput, stackOutput, stderrOutput, err := collectStackOutput(ctx, h.target.Load().PID())
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -509,7 +568,7 @@ func (h *AdminHandler) handleTrace(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 		stderrLog := &bytes.Buffer{}
-		cmd := BuildTraceCommand(h.target.PID(), seconds, outputPath, profile)
+		cmd := BuildTraceCommand(h.target.Load().PID(), seconds, outputPath, profile)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(os.Stderr, stderrLog)
 		if err := cmd.Start(); err != nil {

@@ -6,22 +6,32 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"time"
 )
+
+// maxRecentLogLines 是崩溃退出时保留的最后日志行数。
+const maxRecentLogLines = 50
 
 type TargetProcess struct {
 	pid           int
 	cmd           *exec.Cmd
 	broker        *LogBroker
+	history       *RunHistory
+	startTime     time.Time
 	done          chan error
 	stdoutWriter  io.Writer
 	stderrWriter  io.Writer
 	lineWriter    io.Writer
 	lineWriterMu  sync.Mutex
 	lineWriteDead bool
+	recentMu      sync.Mutex
+	recentLines   []string
 }
 
-func StartTarget(startup string, broker *LogBroker, lineWriter io.Writer, logStdoutOutput bool) (*TargetProcess, error) {
+// 创建被调试的子进程
+func StartTarget(startup string, broker *LogBroker, lineWriter io.Writer, logStdoutOutput bool, history *RunHistory) (*TargetProcess, error) {
 	cmd, err := BuildStartupCommand(startup)
 	if err != nil {
 		return nil, err
@@ -43,6 +53,8 @@ func StartTarget(startup string, broker *LogBroker, lineWriter io.Writer, logStd
 		pid:        cmd.Process.Pid,
 		cmd:        cmd,
 		broker:     broker,
+		history:    history,
+		startTime:  time.Now(),
 		done:       make(chan error, 1),
 		lineWriter: lineWriter,
 	}
@@ -77,6 +89,7 @@ func (p *TargetProcess) consumeOutput(reader io.ReadCloser, localWriter io.Write
 		}
 		p.broker.Broadcast(line)
 		p.writeLineToVector(line)
+		p.recordRecentLine(line)
 	}
 	if err := scanner.Err(); err != nil {
 		message := fmt.Sprintf("[log stream error] %v\n", err)
@@ -87,11 +100,49 @@ func (p *TargetProcess) consumeOutput(reader io.ReadCloser, localWriter io.Write
 
 func (p *TargetProcess) waitForExit() {
 	err := p.cmd.Wait()
+	endTime := time.Now()
 	message := fmt.Sprintf("[target exited] pid=%d err=%v\n", p.pid, err)
 	_, _ = os.Stdout.WriteString(message)
 	p.broker.Broadcast(message)
+	if p.history != nil {
+		exitCode, signal, abnormal := classifyExit(err)
+		record := RunRecord{
+			PID:       p.pid,
+			StartTime: p.startTime,
+			EndTime:   endTime,
+			ExitCode:  exitCode,
+			Signal:    signal,
+			Abnormal:  abnormal,
+			LastLogs:  p.RecentLines(),
+		}
+		if err != nil {
+			record.Err = err.Error()
+		}
+		if abnormal {
+			record.CoreDumpPath = detectCoreDump(p.pid)
+		}
+		p.history.Add(record)
+	}
 	p.done <- err
 	close(p.done)
+}
+
+func (p *TargetProcess) recordRecentLine(line string) {
+	trimmed := strings.TrimRight(line, "\n")
+	p.recentMu.Lock()
+	p.recentLines = append(p.recentLines, trimmed)
+	if len(p.recentLines) > maxRecentLogLines {
+		p.recentLines = p.recentLines[len(p.recentLines)-maxRecentLogLines:]
+	}
+	p.recentMu.Unlock()
+}
+
+func (p *TargetProcess) RecentLines() []string {
+	p.recentMu.Lock()
+	defer p.recentMu.Unlock()
+	out := make([]string, len(p.recentLines))
+	copy(out, p.recentLines)
+	return out
 }
 
 func (p *TargetProcess) writeLineToVector(line string) {
