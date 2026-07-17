@@ -1,7 +1,7 @@
 FROM golang:1.26 AS debugadmin_builder
 
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
 COPY main.go ./
 COPY internal ./internal
 COPY logging ./logging
