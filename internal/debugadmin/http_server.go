@@ -2,6 +2,7 @@ package debugadmin
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 const traceIDLayout = "20060102150405.000"
 
 var traceIDPattern = regexp.MustCompile(`^\d{14}\.\d{3}$`)
+var gdbLogNamePattern = regexp.MustCompile(`^\d{8}-\d{6}\.log$`)
 
 type AdminHandler struct {
 	traces             *TraceStore
@@ -35,7 +37,8 @@ type AdminHandler struct {
 	targetLabel        string
 }
 
-func NewHTTPServer(options Options, staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess, history *RunHistory) (*http.Server, *AdminHandler, error) {
+// NewHTTPServer 启动 http 服务器
+func NewHTTPServer(options *Options, staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess, history *RunHistory) (*http.Server, *AdminHandler, error) {
 	speedscopeFS, err := fs.Sub(staticFS, "build/speedscope")
 	if err != nil {
 		return nil, nil, fmt.Errorf("load embedded speedscope files: %w", err)
@@ -46,7 +49,7 @@ func NewHTTPServer(options Options, staticFS fs.FS, vectorTOMLTemplate *template
 		history:            history,
 		speedscope:         speedscopeFS,
 		vectorTOMLTemplate: vectorTOMLTemplate,
-		targetLabel:        options.Startup,
+		targetLabel:        strings.Join(options.StartupParams, " "),
 	}
 	handler.target.Store(target)
 	mux := http.NewServeMux()
@@ -69,6 +72,8 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/trace", h.handleTrace)
 	mux.HandleFunc("/profile_list", h.handleProfileList)
 	mux.HandleFunc("/profile/", h.handleProfile)
+	mux.HandleFunc("/gdb-log", h.handleGDBLog)
+	mux.HandleFunc("/current-gdb-log", h.handleCurrentGDBLog)
 	mux.Handle("/speedscope/", http.StripPrefix("/speedscope/", http.FileServer(http.FS(h.speedscope))))
 }
 
@@ -88,6 +93,9 @@ func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
 		}
 		</script>
 	`)
+	if target := h.target.Load(); target != nil && target.GDBLogPath() != "" {
+		_, _ = io.WriteString(w, `<a href="/current-gdb-log" target="_blank">Current Gdb Log</a><br/>`)
+	}
 	h.writeRunHistoryHTML(w)
 }
 
@@ -101,7 +109,7 @@ func (h *AdminHandler) writeRunHistoryHTML(w io.Writer) {
 		return
 	}
 	_, _ = io.WriteString(w, `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Consolas,Monaco,monospace;font-size:12px;">`)
-	_, _ = io.WriteString(w, `<tr><th>#</th><th>PID</th><th>Start</th><th>End</th><th>Duration</th><th>Exit</th><th>CoreDump</th><th>Last Logs</th></tr>`)
+	_, _ = io.WriteString(w, `<tr><th>#</th><th>PID</th><th>Start</th><th>End</th><th>Duration</th><th>Exit</th><th>CoreDump</th><th>GDB Log</th><th>Last Logs</th></tr>`)
 	for i := len(records) - 1; i >= 0; i-- {
 		record := records[i]
 		exitDesc := fmt.Sprintf("code=%d", record.ExitCode)
@@ -117,6 +125,10 @@ func (h *AdminHandler) writeRunHistoryHTML(w io.Writer) {
 		if record.CoreDumpPath != "" {
 			coreDump = html.EscapeString(record.CoreDumpPath)
 		}
+		gdbLog := "-"
+		if record.GDBLogPath != "" {
+			gdbLog = fmt.Sprintf(`<a href="/gdb-log?index=%d" target="_blank">%s</a>`, i, html.EscapeString(record.GDBLogPath))
+		}
 		lastLogs := "-"
 		if len(record.LastLogs) > 0 {
 			lastLogs = "<pre style=\"margin:0;white-space:pre-wrap;max-height:160px;overflow:auto;\">" +
@@ -127,7 +139,7 @@ func (h *AdminHandler) writeRunHistoryHTML(w io.Writer) {
 			errDesc = "<br/><span style=\"color:#b91c1c;\">" + html.EscapeString(record.Err) + "</span>"
 		}
 		_, _ = fmt.Fprintf(w,
-			`<tr><td>%d</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td>%s</td></tr>`,
+			`<tr><td>%d</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
 			i+1,
 			record.PID,
 			html.EscapeString(record.StartTime.Format(time.RFC3339)),
@@ -135,10 +147,86 @@ func (h *AdminHandler) writeRunHistoryHTML(w io.Writer) {
 			html.EscapeString(record.EndTime.Sub(record.StartTime).Truncate(time.Millisecond).String()),
 			exitDesc, errDesc,
 			coreDump,
+			gdbLog,
 			lastLogs,
 		)
 	}
 	_, _ = io.WriteString(w, `</table>`)
+}
+
+func (h *AdminHandler) handleGDBLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	index, err := strconv.Atoi(r.URL.Query().Get("index"))
+	if err != nil || index < 0 {
+		http.Error(w, "invalid gdb log index", http.StatusBadRequest)
+		return
+	}
+	records := h.history.Snapshot()
+	if index >= len(records) || !isGDBLogPath(records[index].GDBLogPath) {
+		http.Error(w, "gdb log not found", http.StatusNotFound)
+		return
+	}
+	h.writeGDBLog(w, r, records[index].GDBLogPath)
+}
+
+// handleCurrentGDBLog returns the log file associated with the currently running target.
+func (h *AdminHandler) handleCurrentGDBLog(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	target := h.target.Load()
+	if target == nil || !isGDBLogPath(target.GDBLogPath()) {
+		http.Error(w, "current gdb log not found", http.StatusNotFound)
+		return
+	}
+	h.writeGDBLog(w, r, target.GDBLogPath())
+}
+
+func (h *AdminHandler) writeGDBLog(w http.ResponseWriter, r *http.Request, path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		http.Error(w, "read gdb log failed", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Vary", "Accept-Encoding")
+	if acceptsGzip(r.Header.Get("Accept-Encoding")) {
+		w.Header().Set("Content-Encoding", "gzip")
+		gzipWriter := gzip.NewWriter(w)
+		if _, err := gzipWriter.Write(data); err != nil {
+			return
+		}
+		_ = gzipWriter.Close()
+		return
+	}
+	_, _ = w.Write(data)
+}
+
+func isGDBLogPath(path string) bool {
+	return filepath.Dir(path) == os.TempDir() && gdbLogNamePattern.MatchString(filepath.Base(path))
+}
+
+func acceptsGzip(acceptEncoding string) bool {
+	for _, encoding := range strings.Split(acceptEncoding, ",") {
+		parts := strings.Split(encoding, ";")
+		if !strings.EqualFold(strings.TrimSpace(parts[0]), "gzip") {
+			continue
+		}
+		for _, parameter := range parts[1:] {
+			name, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
+			if !found || !strings.EqualFold(name, "q") {
+				continue
+			}
+			quality, err := strconv.ParseFloat(value, 64)
+			return err == nil && quality > 0
+		}
+		return true
+	}
+	return false
 }
 
 func (h *AdminHandler) handleLog(w http.ResponseWriter, r *http.Request) {

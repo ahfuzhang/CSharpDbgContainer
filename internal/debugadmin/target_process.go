@@ -20,6 +20,8 @@ type TargetProcess struct {
 	broker        *LogBroker
 	history       *RunHistory
 	startTime     time.Time
+	gdbLogPath    string
+	gdbScriptPath string
 	done          chan error
 	stdoutWriter  io.Writer
 	stderrWriter  io.Writer
@@ -30,9 +32,9 @@ type TargetProcess struct {
 	recentLines   []string
 }
 
-// 创建被调试的子进程
-func StartTarget(startup string, broker *LogBroker, lineWriter io.Writer, logStdoutOutput bool, history *RunHistory) (*TargetProcess, error) {
-	cmd, err := BuildStartupCommand(startup)
+// StartTarget 创建被调试的子进程
+func StartTarget(options *Options, broker *LogBroker, lineWriter io.Writer, logStdoutOutput bool, history *RunHistory) (*TargetProcess, error) {
+	cmd, gdbLogPath, gdbScriptPath, err := buildTargetCommand(options)
 	if err != nil {
 		return nil, err
 	}
@@ -46,17 +48,20 @@ func StartTarget(startup string, broker *LogBroker, lineWriter io.Writer, logStd
 		return nil, err
 	}
 	if err := cmd.Start(); err != nil {
+		removeGDBCommandScript(gdbScriptPath)
 		return nil, err
 	}
 
 	target := &TargetProcess{
-		pid:        cmd.Process.Pid,
-		cmd:        cmd,
-		broker:     broker,
-		history:    history,
-		startTime:  time.Now(),
-		done:       make(chan error, 1),
-		lineWriter: lineWriter,
+		pid:           cmd.Process.Pid,
+		cmd:           cmd,
+		broker:        broker,
+		history:       history,
+		startTime:     time.Now(),
+		gdbLogPath:    gdbLogPath,
+		gdbScriptPath: gdbScriptPath,
+		done:          make(chan error, 1),
+		lineWriter:    lineWriter,
 	}
 	if logStdoutOutput {
 		target.stdoutWriter = os.Stdout
@@ -70,6 +75,11 @@ func StartTarget(startup string, broker *LogBroker, lineWriter io.Writer, logStd
 
 func (p *TargetProcess) PID() int {
 	return p.pid
+}
+
+// GDBLogPath returns the log file created for this target when it was started with gdb.
+func (p *TargetProcess) GDBLogPath() string {
+	return p.gdbLogPath
 }
 
 func (p *TargetProcess) Done() <-chan error {
@@ -100,6 +110,7 @@ func (p *TargetProcess) consumeOutput(reader io.ReadCloser, localWriter io.Write
 
 func (p *TargetProcess) waitForExit() {
 	err := p.cmd.Wait()
+	removeGDBCommandScript(p.gdbScriptPath)
 	endTime := time.Now()
 	message := fmt.Sprintf("[target exited] pid=%d err=%v\n", p.pid, err)
 	_, _ = os.Stdout.WriteString(message)
@@ -107,13 +118,14 @@ func (p *TargetProcess) waitForExit() {
 	if p.history != nil {
 		exitCode, signal, abnormal := classifyExit(err)
 		record := RunRecord{
-			PID:       p.pid,
-			StartTime: p.startTime,
-			EndTime:   endTime,
-			ExitCode:  exitCode,
-			Signal:    signal,
-			Abnormal:  abnormal,
-			LastLogs:  p.RecentLines(),
+			PID:        p.pid,
+			StartTime:  p.startTime,
+			EndTime:    endTime,
+			ExitCode:   exitCode,
+			Signal:     signal,
+			Abnormal:   abnormal,
+			LastLogs:   p.RecentLines(),
+			GDBLogPath: p.gdbLogPath,
 		}
 		if err != nil {
 			record.Err = err.Error()
@@ -125,6 +137,32 @@ func (p *TargetProcess) waitForExit() {
 	}
 	p.done <- err
 	close(p.done)
+}
+
+func buildTargetCommand(options *Options) (*exec.Cmd, string, string, error) {
+	if !options.WithGDB {
+		// 没有 gdb 的情况，走原来的逻辑
+		cmd, err := BuildStartupCommand(options)
+		return cmd, "", "", err
+	}
+	// 构造 *.gdb 命令文件
+	scriptPath, logPath, err := WriteGDBCommandScript(time.Now())
+	if err != nil {
+		return nil, "", "", err
+	}
+	// 构造 gdb 命令行:  gdb -q -x xx.gdb --args ${params}
+	cmd, err := BuildGDBStartupCommand(options, scriptPath)
+	if err != nil {
+		removeGDBCommandScript(scriptPath)
+		return nil, "", "", err
+	}
+	return cmd, logPath, scriptPath, nil
+}
+
+func removeGDBCommandScript(scriptPath string) {
+	if scriptPath != "" {
+		_ = os.Remove(scriptPath)
+	}
 }
 
 func (p *TargetProcess) recordRecentLine(line string) {

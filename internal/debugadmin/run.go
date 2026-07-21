@@ -21,14 +21,16 @@ import (
 
 const (
 	defaultPort = 8089
-	configPath  = "init.config.yaml"
-	vectorCfg   = "/tmp/vector.toml"
+	//configPath  = "init.config.yaml"
+	vectorCfg = "/tmp/vector.toml"
 )
 
+// Run 入口函数
 // @param staticFS speedscope的 html 静态资源文件夹
 // @param vectorTOMLTemplate logging/vector/vector.toml 的模板文件
 func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
-	options, err := loadOptions(configPath, os.Args[1:])
+	// todo: 检查特殊的分隔符 --
+	options, err := loadOptions(os.Args[1:])
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "parse options failed: %v\n", err)
 		return 2
@@ -65,7 +67,7 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 	broker := NewLogBroker()
 	history := NewRunHistory()
 	// 创建子进程
-	target, err := StartTarget(options.Startup, broker, vectorStdin, options.LogStdoutOutput, history)
+	target, err := StartTarget(options, broker, vectorStdin, options.LogStdoutOutput, history)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "start target process failed: %v\n", err)
 		return 1
@@ -97,7 +99,7 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 			// 开启 auto.restart 且进程异常退出时，立即重建子进程；正常退出则忽略。
 			if options.AutoRestart && abnormal {
 				_, _ = fmt.Fprintf(os.Stdout, "target process crashed (err=%v), restarting...\n", targetErr)
-				newTarget, restartErr := StartTarget(options.Startup, broker, vectorStdin, options.LogStdoutOutput, history)
+				newTarget, restartErr := StartTarget(options, broker, vectorStdin, options.LogStdoutOutput, history)
 				if restartErr != nil {
 					_, _ = fmt.Fprintf(os.Stderr, "restart target process failed: %v\n", restartErr)
 					shutdown()
@@ -124,48 +126,51 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 	}
 }
 
-func loadOptions(configPath string, args []string) (Options, error) {
-	// cfg, err := LoadConfigFile(configPath)
-	// if err != nil {
-	// 	return Options{}, err
-	// }
-	cfg := &FileConfig{}
-	port := defaultPort
-	if cfg.AdminPort != 0 {
-		port = cfg.AdminPort
+func loadOptions(args []string) (*Options, error) {
+	var startupParams []string
+	for idx, item := range args {
+		if item == "--" {
+			startupParams = args[idx+1:]
+			args = args[:idx]
+			break
+		}
 	}
-	startup := cfg.Startup
+	port := defaultPort
+	//startup := cfg.Startup
 	logPushURL := ""
 	logStdoutOutput := true
 	coreDumpUnlimited := false
 	autoRestart := false
+	withGDB := false
 
 	flagSet := flag.NewFlagSet("DebugAdmin", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
 	flagSet.IntVar(&port, "admin.port", port, "http service listen port")
-	flagSet.StringVar(&startup, "startup", startup, "startup dll or executable")
+	//flagSet.StringVar(&startup, "startup", startup, "startup dll or executable")
 	flagSet.StringVar(&logPushURL, "log.push.url", logPushURL, "push logs to remote endpoint URL via vector")
 	flagSet.BoolVar(&logStdoutOutput, "log.stdout.output", logStdoutOutput, "output target process stdout/stderr to DebugAdmin stdout/stderr")
 	flagSet.BoolVar(&coreDumpUnlimited, "coredump.unlimited", coreDumpUnlimited, "set the core dump size limit to unlimited")
 	flagSet.BoolVar(&autoRestart, "auto.restart", autoRestart, "automatically restart the target process when it crashes")
+	flagSet.BoolVar(&withGDB, "with.gdb", withGDB, "start the target process with gdb")
 	if err := flagSet.Parse(args); err != nil {
-		return Options{}, err
+		return nil, err
 	}
 	if port < 1 || port > 65535 {
-		return Options{}, fmt.Errorf("admin.port should be between 1 and 65535, got %d", port)
+		return nil, fmt.Errorf("admin.port should be between 1 and 65535, got %d", port)
 	}
-	startup = strings.TrimSpace(startup)
-	if startup == "" {
-		return Options{}, errors.New("startup is required; use -startup=xxx.dll or set startup in init.config.yaml")
+	//startup = strings.TrimSpace(startup)
+	if len(startupParams) == 0 {
+		return nil, errors.New("startup is required; use -- <startup command>")
 	}
 	logPushURL = strings.TrimSpace(logPushURL)
-	return Options{
+	return &Options{
 		AdminPort:         port,
-		Startup:           startup,
+		StartupParams:     startupParams,
 		LogPushURL:        logPushURL,
 		LogStdoutOutput:   logStdoutOutput,
 		CoreDumpUnlimited: coreDumpUnlimited,
 		AutoRestart:       autoRestart,
+		WithGDB:           withGDB,
 	}, nil
 }
 

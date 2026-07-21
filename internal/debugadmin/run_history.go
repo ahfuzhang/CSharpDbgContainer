@@ -22,6 +22,7 @@ type RunRecord struct {
 	Err          string
 	LastLogs     []string
 	CoreDumpPath string
+	GDBLogPath   string
 }
 
 // RunHistory 是并发安全的启动记录列表，供 AdminHandler 展示。
