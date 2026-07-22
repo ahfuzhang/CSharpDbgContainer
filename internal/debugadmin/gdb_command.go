@@ -56,9 +56,11 @@ func WriteGDBCommandScript(now time.Time) (scriptPath, logPath string, err error
 func gdbCommandScript(logPath string) string {
 	return fmt.Sprintf(`set pagination off
 set confirm off
+set print address off
 set print pretty on
+set print frame-arguments none
+set print entry-values no
 set print thread-events off
-set print frame-arguments all
 set disable-randomization off
 
 set logging overwrite on
@@ -80,9 +82,9 @@ thread
 echo \n===== Registers =====\n
 info registers
 echo \n===== Crash backtrace =====\n
-bt 10
-set logging off
-continue
+bt
+set logging enabled off
+kill
 quit 128
 `, logPath)
 }
