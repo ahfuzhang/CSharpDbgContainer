@@ -72,6 +72,7 @@ handle SIGABRT stop print pass
 handle SIGBUS  stop print pass
 handle SIGILL  stop print pass
 handle SIGFPE  stop print pass
+handle SIG34   nostop noprint pass
 
 run
 

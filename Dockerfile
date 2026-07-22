@@ -1,9 +1,10 @@
-ARG CODE_SERVER_IMAGE=linuxserver/code-server:latest
+ARG CODE_SERVER_IMAGE=linuxserver/code-server:4.129.0
 ARG DOTNET_VERSION=6.0
 ARG SPEEDSCOPE_VERSION=1.24.0
 ARG OSSUTIL_VERSION=2.3.0
 ARG NETCOREDBG_VERSION=3.1.3-1062
 ARG VECTOR_VERSION=0.53.0
+ARG VSDBG_VERSION=18.10.10709.3
 
 # 阶段：下载 speedscope 静态资源。
 # 用于后续把火焰图前端文件 embed 进 DebugAdmin 二进制。
@@ -63,7 +64,17 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh \
  && chmod +x dotnet-install.sh \
- && ./dotnet-install.sh --channel "${DOTNET_VERSION}" --install-dir "${DOTNET_ROOT}" \
+ && case "${DOTNET_VERSION}" in \
+      6.0)  sdk_version="6.0.428" ;; \
+      8.0)  sdk_version="8.0.423" ;; \
+      10.0) sdk_version="10.0.302" ;; \
+      *)    sdk_version="" ;; \
+    esac \
+ && if [ -n "${sdk_version}" ]; then \
+      ./dotnet-install.sh --version "${sdk_version}" --install-dir "${DOTNET_ROOT}"; \
+    else \
+      ./dotnet-install.sh --channel "${DOTNET_VERSION}" --install-dir "${DOTNET_ROOT}"; \
+    fi \
  && rm -f dotnet-install.sh
 
 # 阶段：安装 dotnet CLI 工具。
@@ -95,13 +106,14 @@ RUN mkdir -p /opt/dotnet-tools \
 # 阶段：安装 vsdbg 调试器。
 # 这里产出 VS 调试协议用的 vsdbg 二进制目录。
 FROM ${CODE_SERVER_IMAGE} AS vsdbg_builder
+ARG VSDBG_VERSION
 WORKDIR /tmp/vsdbg
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl \
  && rm -rf /var/lib/apt/lists/* \
  && mkdir -p /out/vsdbg \
- && curl -sSL https://aka.ms/getvsdbgsh | /bin/sh /dev/stdin -v latest -l /out/vsdbg
+ && curl -sSL https://aka.ms/getvsdbgsh | /bin/sh /dev/stdin -v "${VSDBG_VERSION}" -l /out/vsdbg
 
 # 阶段：下载 netcoredbg 调试器。
 # 这里产出最终镜像里用于堆栈和调试的 netcoredbg 二进制目录。
@@ -138,13 +150,13 @@ FROM ${CODE_SERVER_IMAGE} AS extensions_builder
 #####################
 # 你想预装的插件列表（扩展ID）
 ARG EXTENSIONS="\
-  ms-dotnettools.vscode-dotnet-runtime \
-  ms-dotnettools.csharp \
-  ms-dotnettools.csdevkit \
-  tamasfe.even-better-toml \
-  ms-vscode.makefile-tools \
-  jexus.netcoredbg \
-  redhat.vscode-yaml \
+  ms-dotnettools.vscode-dotnet-runtime@3.1.0 \
+  ms-dotnettools.csharp@2.146.2 \
+  ms-dotnettools.csdevkit@3.27.196 \
+  tamasfe.even-better-toml@0.21.2 \
+  ms-vscode.makefile-tools@0.13.37 \
+  jexus.netcoredbg@1.1.2 \
+  redhat.vscode-yaml@1.25.2026072108 \
 "
 
 WORKDIR /tmp/extensions
