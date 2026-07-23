@@ -4,7 +4,7 @@ ARG SPEEDSCOPE_VERSION=1.24.0
 ARG OSSUTIL_VERSION=2.3.0
 ARG NETCOREDBG_VERSION=3.1.3-1062
 ARG VECTOR_VERSION=0.53.0
-ARG VSDBG_VERSION=18.10.10709.3
+ARG VSDBG_VERSION=18.7.10521.2
 
 # 阶段：下载 speedscope 静态资源。
 # 用于后续把火焰图前端文件 embed 进 DebugAdmin 二进制。
@@ -199,21 +199,27 @@ RUN apt-get update \
 FROM runtime_base AS runtime
 ARG DOTNET_VERSION
 
-COPY --from=debugadmin_builder /out/DebugAdmin /usr/bin/DebugAdmin
-COPY --from=ossutil_fetcher /out/ossutil /usr/bin/ossutil
+# 大而稳定的内容先写入镜像。这样小组件或应用程序变更时，
+# SDK、调试器和扩展等大层能继续命中缓存并复用远端层。
+COPY --from=extensions_builder --chown=abc:abc /out/extensions /config/extensions
 COPY --from=dotnet_sdk_builder /opt/dotnet /usr/share/dotnet
-COPY --from=dotnet_tools_builder /opt/dotnet-tools /usr/bin/dotnetsdk
 COPY --from=vsdbg_builder /out/vsdbg /usr/bin/vsdbg
-COPY --from=netcoredbg_fetcher /out/netcoredbg /usr/bin/netcoredbg
+COPY --from=dotnet_tools_builder /opt/dotnet-tools /usr/bin/dotnetsdk
 COPY --from=vector_fetcher /out/vector/bin/vector /usr/bin/vector
 
 RUN version="$(basename "$(find /usr/share/dotnet/sdk/ -mindepth 1 -maxdepth 1 -type d -name "${DOTNET_VERSION}*" | head -n 1)")" \
  && test -n "${version}" \
  && ln -snf /usr/bin/dotnetsdk "/usr/share/dotnet/sdk/${version}/dotnetsdk"
 
-COPY --from=extensions_builder --chown=abc:abc /out/extensions /config/extensions
+# 小而稳定的内容随后写入镜像。
+COPY --from=ossutil_fetcher /out/ossutil /usr/bin/ossutil
+COPY --from=netcoredbg_fetcher /out/netcoredbg /usr/bin/netcoredbg
 COPY --chown=abc:abc ./CodeServer/config.yaml /config/.config/code-server/config.yaml
 COPY --chown=abc:abc ./CodeServer/settings.json /config/.local/share/code-server/User/settings.json
+
+# DebugAdmin 是最常变化的内容，必须保持为最后一个文件系统层。
+# 这样仅修改 Go 代码时，前面的 .NET SDK、调试器和 code-server 扩展层仍可复用。
+COPY --from=debugadmin_builder /out/DebugAdmin /usr/bin/DebugAdmin
 
 USER abc
 

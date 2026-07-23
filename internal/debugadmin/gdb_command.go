@@ -73,6 +73,7 @@ handle SIGBUS  stop print pass
 handle SIGILL  stop print pass
 handle SIGFPE  stop print pass
 handle SIG34   nostop noprint pass
+handle SIGPIPE nostop noprint pass
 
 run
 
@@ -80,10 +81,10 @@ echo \n===== Program status =====\n
 info program
 echo \n===== Crashed thread =====\n
 thread
-echo \n===== Registers =====\n
-info registers
 echo \n===== Crash backtrace =====\n
 bt
+echo \n===== Registers =====\n
+info registers
 set logging enabled off
 kill
 quit 128
