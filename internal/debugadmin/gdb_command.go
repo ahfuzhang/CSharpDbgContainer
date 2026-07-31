@@ -12,15 +12,13 @@ const gdbLogTimeLayout = "20060102-150405"
 
 // BuildGDBStartupCommand creates the gdb invocation after all debugger commands
 // have been persisted to a script. GDB reads the script before it starts the target.
-func BuildGDBStartupCommand(options *Options, scriptPath string) (*exec.Cmd, error) {
-	targetOptions := *options
-	targetOptions.WithGDB = false
-	targetCmd, err := BuildStartupCommand(&targetOptions)
+func BuildGDBStartupCommand(scriptPath string) (*exec.Cmd, error) {
+	program, args, err := resolveStartupProgram()
 	if err != nil {
 		return nil, err
 	}
-	args := append([]string{"-q", "-x", scriptPath, "--args"}, targetCmd.Args...)
-	return exec.Command("gdb", args...), nil
+	gdbArgs := append([]string{"-q", "-x", scriptPath, "--args", program}, args...)
+	return exec.Command("gdb", gdbArgs...), nil
 }
 
 // WriteGDBCommandScript writes the complete non-interactive debugging sequence.

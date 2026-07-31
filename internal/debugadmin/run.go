@@ -35,6 +35,7 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 		_, _ = fmt.Fprintf(os.Stderr, "parse options failed: %v\n", err)
 		return 2
 	}
+	GlobalOptions = options
 	if options.CoreDumpUnlimited {
 		if err := enableUnlimitedCoreDump(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "set RLIMIT_CORE to unlimited failed: %v\n", err)
@@ -67,14 +68,14 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 	broker := NewLogBroker()
 	history := NewRunHistory()
 	// 创建子进程
-	target, err := StartTarget(options, broker, vectorStdin, options.LogStdoutOutput, history)
+	target, err := StartTarget(broker, vectorStdin, options.LogStdoutOutput, history)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "start target process failed: %v\n", err)
 		return 1
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "target process started, pid=%d\n", target.PID())
 
-	server, handler, err := NewHTTPServer(options, staticFS, vectorTOMLTemplate, broker, target, history)
+	server, handler, err := NewHTTPServer(staticFS, vectorTOMLTemplate, broker, target, history)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "create http server failed: %v\n", err)
 		return 1
@@ -99,7 +100,7 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 			// 开启 auto.restart 且进程异常退出时，立即重建子进程；正常退出则忽略。
 			if options.AutoRestart && abnormal {
 				_, _ = fmt.Fprintf(os.Stdout, "target process crashed (err=%v), restarting...\n", targetErr)
-				newTarget, restartErr := StartTarget(options, broker, vectorStdin, options.LogStdoutOutput, history)
+				newTarget, restartErr := StartTarget(broker, vectorStdin, options.LogStdoutOutput, history)
 				if restartErr != nil {
 					_, _ = fmt.Fprintf(os.Stderr, "restart target process failed: %v\n", restartErr)
 					shutdown()

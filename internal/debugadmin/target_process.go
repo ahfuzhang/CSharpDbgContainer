@@ -33,8 +33,8 @@ type TargetProcess struct {
 }
 
 // StartTarget 创建被调试的子进程
-func StartTarget(options *Options, broker *LogBroker, lineWriter io.Writer, logStdoutOutput bool, history *RunHistory) (*TargetProcess, error) {
-	cmd, gdbLogPath, gdbScriptPath, err := buildTargetCommand(options)
+func StartTarget(broker *LogBroker, lineWriter io.Writer, logStdoutOutput bool, history *RunHistory) (*TargetProcess, error) {
+	cmd, gdbLogPath, gdbScriptPath, err := buildTargetCommand()
 	if err != nil {
 		return nil, err
 	}
@@ -139,10 +139,10 @@ func (p *TargetProcess) waitForExit() {
 	close(p.done)
 }
 
-func buildTargetCommand(options *Options) (*exec.Cmd, string, string, error) {
-	if !options.WithGDB {
+func buildTargetCommand() (*exec.Cmd, string, string, error) {
+	if !GlobalOptions.WithGDB {
 		// 没有 gdb 的情况，走原来的逻辑
-		cmd, err := BuildStartupCommand(options)
+		cmd, err := BuildStartupCommand()
 		return cmd, "", "", err
 	}
 	// 构造 *.gdb 命令文件
@@ -151,7 +151,7 @@ func buildTargetCommand(options *Options) (*exec.Cmd, string, string, error) {
 		return nil, "", "", err
 	}
 	// 构造 gdb 命令行:  gdb -q -x xx.gdb --args ${params}
-	cmd, err := BuildGDBStartupCommand(options, scriptPath)
+	cmd, err := BuildGDBStartupCommand(scriptPath)
 	if err != nil {
 		removeGDBCommandScript(scriptPath)
 		return nil, "", "", err

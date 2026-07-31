@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"html"
@@ -22,6 +23,16 @@ import (
 	"time"
 )
 
+//go:embed index.html.tpl
+var indexHTMLContent string
+
+var indexHTMLTemplate = template.Must(template.New("index.html").Parse(indexHTMLContent))
+
+//go:embed threadinfo.html.tpl
+var threadInfoHTMLContent string
+
+var threadInfoHTMLTemplate = template.Must(template.New("threadinfo.html").Parse(threadInfoHTMLContent))
+
 const traceIDLayout = "20060102150405.000"
 
 var traceIDPattern = regexp.MustCompile(`^\d{14}\.\d{3}$`)
@@ -38,7 +49,7 @@ type AdminHandler struct {
 }
 
 // NewHTTPServer 启动 http 服务器
-func NewHTTPServer(options *Options, staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess, history *RunHistory) (*http.Server, *AdminHandler, error) {
+func NewHTTPServer(staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess, history *RunHistory) (*http.Server, *AdminHandler, error) {
 	speedscopeFS, err := fs.Sub(staticFS, "build/speedscope")
 	if err != nil {
 		return nil, nil, fmt.Errorf("load embedded speedscope files: %w", err)
@@ -49,13 +60,13 @@ func NewHTTPServer(options *Options, staticFS fs.FS, vectorTOMLTemplate *templat
 		history:            history,
 		speedscope:         speedscopeFS,
 		vectorTOMLTemplate: vectorTOMLTemplate,
-		targetLabel:        strings.Join(options.StartupParams, " "),
+		targetLabel:        strings.Join(GlobalOptions.StartupParams, " "),
 	}
 	handler.target.Store(target)
 	mux := http.NewServeMux()
 	handler.Register(mux)
 	return &http.Server{
-		Addr:    fmt.Sprintf(":%d", options.AdminPort),
+		Addr:    fmt.Sprintf(":%d", GlobalOptions.AdminPort),
 		Handler: mux,
 	}, handler, nil
 }
@@ -69,6 +80,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/", h.handleRoot)
 	mux.HandleFunc("/log", h.handleLog)
 	mux.HandleFunc("/stack", h.handleStack)
+	mux.HandleFunc("/show_threads", h.handleShowThreads)
 	mux.HandleFunc("/trace", h.handleTrace)
 	mux.HandleFunc("/profile_list", h.handleProfileList)
 	mux.HandleFunc("/profile/", h.handleProfile)
@@ -77,81 +89,68 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.Handle("/speedscope/", http.StripPrefix("/speedscope/", http.FileServer(http.FS(h.speedscope))))
 }
 
-func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Add("Content-Type", "text/html")
-	_, _ = fmt.Fprintf(w, "DebugAdmin target=%s pid=%d<br/>\n", h.targetLabel, h.target.Load().PID())
-	_, _ = io.WriteString(w, "GET /log\n<br/>GET /stack\n<br/>GET /trace?seconds=10\n<br/>GET /profile_list\n<br/>GET /speedscope/\n<br/>")
-	_, _ = fmt.Fprintf(w, `
-		<a href="/log" target="_blank">show log</a><br/>
-		<a href="/stack" target="_blank">show stack</a><br/>
-		<a href="/profile_list" target="_blank">show profile list</a><br/>
-		Trace <input type="text" size=4 value=10 id="seconds"/> seconds, then <input type="button" value="Show Profile" onclick="profile()"/><br/>
-		<script>
-		function profile(){
-			var textbox = document.getElementById("seconds");
-			window.open("/trace?seconds=" + textbox.value, "about:blank");
-		}
-		</script>
-	`)
-	if target := h.target.Load(); target != nil && target.GDBLogPath() != "" {
-		_, _ = io.WriteString(w, `<a href="/current-gdb-log" target="_blank">Current Gdb Log</a><br/>`)
-	}
-	h.writeRunHistoryHTML(w)
+type indexPageData struct {
+	TargetLabel       string
+	PID               int
+	ShowCurrentGDBLog bool
+	Processes         []ProcessInfo
+	RunHistory        []runHistoryRow
 }
 
-// writeRunHistoryHTML 展示目标子进程的所有启动记录：启动时间、结束时间、
-// 退出码/信号、是否有 core dump 文件，以及退出前的最后若干行日志。
-func (h *AdminHandler) writeRunHistoryHTML(w io.Writer) {
-	records := h.history.Snapshot()
-	_, _ = io.WriteString(w, `<h3>Run History</h3>`)
-	if len(records) == 0 {
-		_, _ = io.WriteString(w, `<div>no exit records yet</div>`)
-		return
-	}
-	_, _ = io.WriteString(w, `<table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;font-family:Consolas,Monaco,monospace;font-size:12px;">`)
-	_, _ = io.WriteString(w, `<tr><th>#</th><th>PID</th><th>Start</th><th>End</th><th>Duration</th><th>Exit</th><th>CoreDump</th><th>GDB Log</th><th>Last Logs</th></tr>`)
+// runHistoryRow 是 RunRecord 格式化之后、可直接交给模板渲染的一行。
+// 字段值为转义后的纯数据，不包含任何 HTML 标签，具体展示样式由模板决定。
+type runHistoryRow struct {
+	Index        int
+	PID          int
+	Start        string
+	End          string
+	Duration     string
+	ExitCode     int
+	Signal       string
+	Abnormal     bool
+	ErrMsg       string
+	CoreDumpPath string
+	GDBLogPath   string
+	GDBLogIndex  int
+	LastLogs     string
+}
+
+func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Add("Content-Type", "text/html")
+	target := h.target.Load()
+	_ = indexHTMLTemplate.Execute(w, indexPageData{
+		TargetLabel:       h.targetLabel,
+		PID:               target.PID(),
+		ShowCurrentGDBLog: target != nil && target.GDBLogPath() != "",
+		Processes:         listContainerProcesses(os.Getpid()),
+		RunHistory:        buildRunHistoryRows(h.history.Snapshot()),
+	})
+}
+
+// buildRunHistoryRows 把目标子进程的启动记录（启动时间、结束时间、退出码/信号、
+// 是否有 core dump 文件，以及退出前的最后若干行日志）格式化为模板可直接渲染的行，
+// 按时间倒序排列（最近一次启动在最前面）。
+func buildRunHistoryRows(records []RunRecord) []runHistoryRow {
+	rows := make([]runHistoryRow, 0, len(records))
 	for i := len(records) - 1; i >= 0; i-- {
 		record := records[i]
-		exitDesc := fmt.Sprintf("code=%d", record.ExitCode)
-		if record.Signal != "" {
-			exitDesc += fmt.Sprintf(" signal=%s", record.Signal)
-		}
-		if record.Abnormal {
-			exitDesc = `<span style="color:#b91c1c;font-weight:700;">` + html.EscapeString(exitDesc) + " (abnormal)</span>"
-		} else {
-			exitDesc = `<span style="color:#166534;">` + html.EscapeString(exitDesc) + " (normal)</span>"
-		}
-		coreDump := "-"
-		if record.CoreDumpPath != "" {
-			coreDump = html.EscapeString(record.CoreDumpPath)
-		}
-		gdbLog := "-"
-		if record.GDBLogPath != "" {
-			gdbLog = fmt.Sprintf(`<a href="/gdb-log?index=%d" target="_blank">%s</a>`, i, html.EscapeString(record.GDBLogPath))
-		}
-		lastLogs := "-"
-		if len(record.LastLogs) > 0 {
-			lastLogs = "<pre style=\"margin:0;white-space:pre-wrap;max-height:160px;overflow:auto;\">" +
-				html.EscapeString(strings.Join(record.LastLogs, "\n")) + "</pre>"
-		}
-		errDesc := ""
-		if record.Err != "" {
-			errDesc = "<br/><span style=\"color:#b91c1c;\">" + html.EscapeString(record.Err) + "</span>"
-		}
-		_, _ = fmt.Fprintf(w,
-			`<tr><td>%d</td><td>%d</td><td>%s</td><td>%s</td><td>%s</td><td>%s%s</td><td>%s</td><td>%s</td><td>%s</td></tr>`,
-			i+1,
-			record.PID,
-			html.EscapeString(record.StartTime.Format(time.RFC3339)),
-			html.EscapeString(record.EndTime.Format(time.RFC3339)),
-			html.EscapeString(record.EndTime.Sub(record.StartTime).Truncate(time.Millisecond).String()),
-			exitDesc, errDesc,
-			coreDump,
-			gdbLog,
-			lastLogs,
-		)
+		rows = append(rows, runHistoryRow{
+			Index:        i + 1,
+			PID:          record.PID,
+			Start:        html.EscapeString(record.StartTime.Format(time.RFC3339)),
+			End:          html.EscapeString(record.EndTime.Format(time.RFC3339)),
+			Duration:     html.EscapeString(record.EndTime.Sub(record.StartTime).Truncate(time.Millisecond).String()),
+			ExitCode:     record.ExitCode,
+			Signal:       html.EscapeString(record.Signal),
+			Abnormal:     record.Abnormal,
+			ErrMsg:       html.EscapeString(record.Err),
+			CoreDumpPath: html.EscapeString(record.CoreDumpPath),
+			GDBLogPath:   html.EscapeString(record.GDBLogPath),
+			GDBLogIndex:  i,
+			LastLogs:     html.EscapeString(strings.Join(record.LastLogs, "\n")),
+		})
 	}
-	_, _ = io.WriteString(w, `</table>`)
+	return rows
 }
 
 func (h *AdminHandler) handleGDBLog(w http.ResponseWriter, r *http.Request) {
@@ -278,6 +277,75 @@ func (h *AdminHandler) handleStack(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
 	renderStackHTML(w, startupOutput, stackOutput, stderrOutput, err)
+}
+
+// handleShowThreads attaches gdb to an arbitrary pid, runs "thread apply all bt",
+// and renders the per-thread backtraces so they can be browsed in a separate window.
+func (h *AdminHandler) handleShowThreads(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	pid, err := strconv.Atoi(r.URL.Query().Get("pid"))
+	if err != nil || pid <= 0 {
+		http.Error(w, "invalid pid", http.StatusBadRequest)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	cmd := BuildThreadDumpCommand(ctx, pid)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	_ = threadInfoHTMLTemplate.Execute(w, buildThreadInfoPageData(pid, stdout.String(), stderr.String(), runErr))
+}
+
+type threadInfoPageData struct {
+	PID     int
+	Threads []threadInfoRow
+	Misc    string
+	Stderr  string
+	Error   string
+}
+
+type threadInfoRow struct {
+	ID    int
+	Label string
+	Stack string
+}
+
+// buildThreadInfoPageData turns raw "thread apply all bt" output into rows the
+// template can render directly, with all text pre-escaped.
+func buildThreadInfoPageData(pid int, stdout, stderrOutput string, runErr error) threadInfoPageData {
+	threads, misc := parseStackBlocks(stdout)
+	rows := make([]threadInfoRow, 0, len(threads))
+	for i, thread := range threads {
+		lines := make([]string, 0, len(thread.frames)+len(thread.extra))
+		lines = append(lines, thread.frames...)
+		lines = append(lines, thread.extra...)
+		rows = append(rows, threadInfoRow{
+			ID:    i,
+			Label: html.EscapeString(thread.header),
+			Stack: html.EscapeString(strings.Join(lines, "\n")),
+		})
+	}
+	errMsg := ""
+	if runErr != nil {
+		errMsg = runErr.Error()
+	}
+	return threadInfoPageData{
+		PID:     pid,
+		Threads: rows,
+		Misc:    html.EscapeString(strings.Join(misc, "\n")),
+		Stderr:  html.EscapeString(strings.TrimSpace(stderrOutput)),
+		Error:   html.EscapeString(errMsg),
+	}
 }
 
 type stackThreadBlock struct {

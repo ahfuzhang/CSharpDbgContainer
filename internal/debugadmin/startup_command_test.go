@@ -36,7 +36,8 @@ func TestBuildStartupCommand(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd, err := BuildStartupCommand(&tt.opts)
+			GlobalOptions = &tt.opts
+			cmd, err := BuildStartupCommand()
 			if err != nil {
 				t.Fatalf("BuildStartupCommand() error = %v", err)
 			}
@@ -95,8 +96,8 @@ func TestWriteGDBCommandScript(t *testing.T) {
 }
 
 func TestBuildGDBStartupCommand(t *testing.T) {
-	options := &Options{WithGDB: true, StartupParams: []string{"app.dll", "-param1=value1"}}
-	cmd, err := BuildGDBStartupCommand(options, "/tmp/debugadmin-gdb.gdb")
+	GlobalOptions = &Options{WithGDB: true, StartupParams: []string{"app.dll", "-param1=value1"}}
+	cmd, err := BuildGDBStartupCommand("/tmp/debugadmin-gdb.gdb")
 	if err != nil {
 		t.Fatalf("BuildGDBStartupCommand() error = %v", err)
 	}
