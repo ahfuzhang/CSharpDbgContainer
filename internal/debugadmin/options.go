@@ -8,6 +8,8 @@ type Options struct {
 	CoreDumpUnlimited bool
 	AutoRestart       bool
 	WithGDB           bool
+	WithCoverage      bool
+	CoverageName      string // 用于指定覆盖率文件名
 }
 
 // GlobalOptions 保存命令行解析得到的配置信息。

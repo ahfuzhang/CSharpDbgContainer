@@ -126,7 +126,7 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/* \
  && wget -O netcoredbg.tar.gz "https://github.com/Samsung/netcoredbg/releases/download/${NETCOREDBG_VERSION}/netcoredbg-linux-amd64.tar.gz" \
  && mkdir -p /out/netcoredbg \
- && tar -zxf netcoredbg.tar.gz -C /out/netcoredbg \
+ && tar -zxf netcoredbg.tar.gz -C /out/netcoredbg --strip-components=1 \
  && rm -f netcoredbg.tar.gz
 
 # 阶段：下载 vector。

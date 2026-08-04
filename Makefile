@@ -1,5 +1,4 @@
 
-# make docker-build ver=6.0
 # make docker-build ver=8.0
 # make docker-build ver=10.0
 DOTNET_DOCKER_IMAGE ?= ahfuzhang/csharp-dbg-all-in-one:dotnet10

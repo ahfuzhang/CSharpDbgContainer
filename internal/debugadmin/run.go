@@ -16,6 +16,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
 )
 
@@ -143,6 +144,7 @@ func loadOptions(args []string) (*Options, error) {
 	coreDumpUnlimited := false
 	autoRestart := false
 	withGDB := false
+	withCoverage := false
 
 	flagSet := flag.NewFlagSet("DebugAdmin", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
@@ -153,8 +155,12 @@ func loadOptions(args []string) (*Options, error) {
 	flagSet.BoolVar(&coreDumpUnlimited, "coredump.unlimited", coreDumpUnlimited, "set the core dump size limit to unlimited")
 	flagSet.BoolVar(&autoRestart, "auto.restart", autoRestart, "automatically restart the target process when it crashes")
 	flagSet.BoolVar(&withGDB, "with.gdb", withGDB, "start the target process with gdb")
+	flagSet.BoolVar(&withCoverage, "with.coverage", withCoverage, "start the target process with dotnet-coverage to collect code coverage")
 	if err := flagSet.Parse(args); err != nil {
 		return nil, err
+	}
+	if withGDB && withCoverage {
+		return nil, errors.New("-with.gdb and -with.coverage cannot be used together")
 	}
 	if port < 1 || port > 65535 {
 		return nil, fmt.Errorf("admin.port should be between 1 and 65535, got %d", port)
@@ -172,6 +178,8 @@ func loadOptions(args []string) (*Options, error) {
 		CoreDumpUnlimited: coreDumpUnlimited,
 		AutoRestart:       autoRestart,
 		WithGDB:           withGDB,
+		WithCoverage:      withCoverage,
+		CoverageName:      uuid.NewString(),
 	}, nil
 }
 

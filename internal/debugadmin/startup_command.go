@@ -2,6 +2,7 @@ package debugadmin
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 )
@@ -11,10 +12,26 @@ func BuildStartupCommand() (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !GlobalOptions.WithGDB {
-		return exec.Command(program, args...), nil
+	if GlobalOptions.WithGDB {
+		return exec.Command("gdb", append([]string{"--args", program}, args...)...), nil
 	}
-	return exec.Command("gdb", append([]string{"--args", program}, args...)...), nil
+	if GlobalOptions.WithCoverage {
+		return exec.Command("dotnet-coverage", buildCoverageArgs(program, args)...), nil
+	}
+	return exec.Command(program, args...), nil
+}
+
+// buildCoverageArgs 构造 dotnet-coverage 的命令行参数：
+// collect --session-id ${name} --output /tmp/${name}.coverage ${program} ${args...}
+func buildCoverageArgs(program string, args []string) []string {
+	name := GlobalOptions.CoverageName
+	coverageArgs := []string{
+		"collect",
+		"--session-id", name,
+		"--output", fmt.Sprintf("/tmp/%s.coverage", name),
+		program,
+	}
+	return append(coverageArgs, args...)
 }
 
 // resolveStartupProgram 根据 GlobalOptions.StartupParams 解析出实际要执行的程序名和参数，

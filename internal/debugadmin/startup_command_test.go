@@ -32,6 +32,11 @@ func TestBuildStartupCommand(t *testing.T) {
 			opts: Options{WithGDB: true, StartupParams: []string{"./app", "--port", "8080"}},
 			want: []string{"gdb", "--args", "./app", "--port", "8080"},
 		},
+		{
+			name: "dll with coverage",
+			opts: Options{WithCoverage: true, CoverageName: "cov-123", StartupParams: []string{"app.dll", "-param1=value1"}},
+			want: []string{"dotnet-coverage", "collect", "--session-id", "cov-123", "--output", "/tmp/cov-123.coverage", "dotnet", "app.dll", "-param1=value1"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -58,6 +63,13 @@ func TestLoadOptionsWithGDB(t *testing.T) {
 	}
 	if want := []string{"app.dll", "-param1=value1"}; !reflect.DeepEqual(opts.StartupParams, want) {
 		t.Errorf("loadOptions() StartupParams = %q, want %q", opts.StartupParams, want)
+	}
+}
+
+func TestLoadOptionsWithGDBAndCoverageMutuallyExclusive(t *testing.T) {
+	_, err := loadOptions([]string{"-with.gdb", "-with.coverage", "--", "app.dll"})
+	if err == nil {
+		t.Fatal("loadOptions() error = nil, want error for -with.gdb and -with.coverage together")
 	}
 }
 

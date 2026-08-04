@@ -21,6 +21,8 @@ import (
 	"sync/atomic"
 	"text/template"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 //go:embed index.html.tpl
@@ -86,6 +88,9 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/profile/", h.handleProfile)
 	mux.HandleFunc("/gdb-log", h.handleGDBLog)
 	mux.HandleFunc("/current-gdb-log", h.handleCurrentGDBLog)
+	mux.HandleFunc("/code_coverage/", h.handleCodeCoverage)
+	mux.HandleFunc("/reset_coverage_data", h.handleResetCoverageData)
+	mux.HandleFunc("/code_coverage_report/{uuid}/", h.handleCodeCoverageReport)
 	mux.Handle("/speedscope/", http.StripPrefix("/speedscope/", http.FileServer(http.FS(h.speedscope))))
 }
 
@@ -93,6 +98,7 @@ type indexPageData struct {
 	TargetLabel       string
 	PID               int
 	ShowCurrentGDBLog bool
+	WithCoverage      bool
 	Processes         []ProcessInfo
 	RunHistory        []runHistoryRow
 }
@@ -122,7 +128,8 @@ func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
 		TargetLabel:       h.targetLabel,
 		PID:               target.PID(),
 		ShowCurrentGDBLog: target != nil && target.GDBLogPath() != "",
-		Processes:         listContainerProcesses(os.Getpid()),
+		WithCoverage:      GlobalOptions.WithCoverage,
+		Processes:         listContainerProcesses(GlobalOptions.StartupParams),
 		RunHistory:        buildRunHistoryRows(h.history.Snapshot()),
 	})
 }
@@ -207,6 +214,104 @@ func (h *AdminHandler) writeGDBLog(w http.ResponseWriter, r *http.Request, path 
 
 func isGDBLogPath(path string) bool {
 	return filepath.Dir(path) == os.TempDir() && gdbLogNamePattern.MatchString(filepath.Base(path))
+}
+
+var reportUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// handleCodeCoverage 采集目标进程当前的代码覆盖率数据并生成 HTML 报告：
+//  1. dotnet-coverage snapshot 从正在运行的目标进程（通过 CoverageName 对应的 session）抓取一份 .coverage 快照；
+//  2. dotnet-coverage merge 把快照转换为 cobertura xml；
+//  3. reportgenerator 把 cobertura xml 渲染成 HTML 报告，输出到以随机 uuid 命名的目录；
+//     完成后跳转到 /code_coverage_report/{uuid}/ 展示报告。
+func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !GlobalOptions.WithCoverage {
+		http.Error(w, "code coverage is not enabled (missing -with.coverage)", http.StatusNotFound)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+
+	timestamp := time.Now().Format("20060102150405")
+	coverageFile := filepath.Join(os.TempDir(), timestamp+".coverage")
+	coberturaFile := filepath.Join(os.TempDir(), timestamp+".cobertura.xml")
+	reportID := uuid.NewString()
+	htmlDir := filepath.Join(os.TempDir(), reportID)
+
+	steps := []struct {
+		label string
+		cmd   *exec.Cmd
+	}{
+		{"dotnet-coverage snapshot", exec.CommandContext(ctx, "dotnet-coverage", "snapshot", "--output", coverageFile, GlobalOptions.CoverageName)},
+		{"dotnet-coverage merge", exec.CommandContext(ctx, "dotnet-coverage", "merge", coverageFile, "--output", coberturaFile, "--output-format", "cobertura")},
+		{"reportgenerator", exec.CommandContext(ctx, "reportgenerator", "-reports:"+coberturaFile, "-targetdir:"+htmlDir, "-reporttypes:Html")},
+	}
+	for _, step := range steps {
+		output, err := step.cmd.CombinedOutput()
+		if err != nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			renderCodeCoverageErrorHTML(w, step.label, err, string(output))
+			return
+		}
+	}
+
+	http.Redirect(w, r, "/code_coverage_report/"+reportID+"/", http.StatusFound)
+}
+
+// handleResetCoverageData 清空目标进程当前的代码覆盖率数据：
+// dotnet-coverage snapshot ${session_id} --output /dev/null --reset true
+// 命令行创建成功后立即返回，不等待其执行完成。
+func (h *AdminHandler) handleResetCoverageData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !GlobalOptions.WithCoverage {
+		http.Error(w, "code coverage is not enabled (missing -with.coverage)", http.StatusNotFound)
+		return
+	}
+
+	cmd := exec.Command("dotnet-coverage", "snapshot", GlobalOptions.CoverageName, "--output", "/dev/null", "--reset", "true")
+	if err := cmd.Start(); err != nil {
+		http.Error(w, fmt.Sprintf("start dotnet-coverage snapshot failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	go func() { _ = cmd.Wait() }()
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func renderCodeCoverageErrorHTML(w http.ResponseWriter, step string, err error, output string) {
+	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Code Coverage Error</title></head><body>
+<h2 style="color:#b91c1c">%s failed</h2>
+<pre>%s</pre>
+</body></html>`, html.EscapeString(step), html.EscapeString(strings.TrimSpace(output+"\n"+err.Error())))
+}
+
+// handleCodeCoverageReport 把 /code_coverage_report/{uuid}/... 映射到 reportgenerator
+// 输出的报告目录 /tmp/{uuid}/，供浏览器直接访问生成好的 HTML 报告。
+func (h *AdminHandler) handleCodeCoverageReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	reportID := r.PathValue("uuid")
+	if !reportUUIDPattern.MatchString(reportID) {
+		http.Error(w, "invalid report id", http.StatusBadRequest)
+		return
+	}
+	dir := filepath.Join(os.TempDir(), reportID)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	prefix := "/code_coverage_report/" + reportID + "/"
+	http.StripPrefix(prefix, http.FileServer(http.Dir(dir))).ServeHTTP(w, r)
 }
 
 func acceptsGzip(acceptEncoding string) bool {
@@ -692,6 +797,21 @@ func formatStackFrameHTML(frame string) string {
 	return b.String()
 }
 
+// profilingTargetPID 返回用于 cpu profiling 的真实目标进程 pid。
+// 当以 --with.gdb 或 --with.coverage 启动时，h.target.PID() 是 gdb / dotnet-coverage
+// 外壳进程的 pid，必须通过 GlobalOptions.StartupParams 在进程树中定位真正的目标进程，
+// 否则 dotnet-trace 会挂到外壳进程上，采集不到目标进程的 cpu 数据。
+func (h *AdminHandler) profilingTargetPID() int {
+	pid := h.target.Load().PID()
+	if !GlobalOptions.WithGDB && !GlobalOptions.WithCoverage {
+		return pid
+	}
+	if resolved, ok := findTargetDescendantPID(pid, GlobalOptions.StartupParams); ok {
+		return resolved
+	}
+	return pid
+}
+
 func (h *AdminHandler) handleTrace(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -724,7 +844,7 @@ func (h *AdminHandler) handleTrace(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 		stderrLog := &bytes.Buffer{}
-		cmd := BuildTraceCommand(h.target.Load().PID(), seconds, outputPath, profile)
+		cmd := BuildTraceCommand(h.profilingTargetPID(), seconds, outputPath, profile)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(os.Stderr, stderrLog)
 		if err := cmd.Start(); err != nil {

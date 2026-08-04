@@ -92,25 +92,16 @@
 <span class="sub">target={{.TargetLabel}} pid={{.PID}}</span>
 </h1>
 
-<section class="section-overview">
-<h2>Overview</h2>
-GET /log
-<br/>GET /stack
-<br/>GET /trace?seconds=10
-<br/>GET /profile_list
-<br/>GET /speedscope/
-</section>
-
 <section class="section-links">
 <h2>Quick Links</h2>
 <div class="links">
 <a href="/log" target="_blank">show log</a>
 <a href="/stack" target="_blank">show stack</a>
-<a href="/profile_list" target="_blank">show profile list</a>
+<a href="/profile_list" target="_blank">show cpuprofile list</a>
 {{if .ShowCurrentGDBLog}}<a href="/current-gdb-log" target="_blank">Current Gdb Log</a>{{end}}
 </div>
 <div class="trace-form">
-Trace <input type="text" size=4 value=10 id="seconds"/> seconds, then <input type="button" value="Show Profile" onclick="profile()"/>
+Trace <input type="text" size=4 value=10 id="seconds"/> seconds, then <input type="button" value="Show CPU Profile" onclick="profile()"/>
 </div>
 <script>
 function profile(){
@@ -124,13 +115,14 @@ function profile(){
 <h2>Container Processes</h2>
 <table>
 <tr><th>PID</th><th>Uptime</th><th>Memory</th><th>Thread Count</th><th>Cmdline</th><th>Actions</th></tr>
-{{range .Processes}}<tr{{if .IsCurrent}} style="background-color:#fde68a;"{{end}}><td>{{.PID}}</td><td>{{.Uptime}}</td><td>{{.Memory}}</td><td>{{.ThreadCount}}</td><td>{{.Cmdline}}</td><td><input type="button" value="Show Threads" onclick="showThreads({{.PID}})"/></td></tr>
+{{range .Processes}}<tr{{if .IsTarget}} style="background-color:#fde68a;"{{end}}><td>{{.PID}}</td><td>{{.Uptime}}</td><td>{{.Memory}}</td><td>{{.ThreadCount}}</td><td>{{.Cmdline}}</td><td>
+{{if .IsTarget}}
+{{if $.WithCoverage}}
+  <input type="button" value="Show Code Coverage" onclick="window.open('/code_coverage/', '_blank')"/>
+  <input type="button" value="Reset Coverage Data" onclick="resetCoverageData()"/>
+{{end}}
+{{end}}</td></tr>
 {{end}}</table>
-<script>
-function showThreads(pid){
-	window.open("/show_threads?pid=" + pid, "_blank");
-}
-</script>
 </section>
 
 <section class="section-history">
@@ -140,6 +132,21 @@ function showThreads(pid){
 {{range .RunHistory}}<tr><td>{{.Index}}</td><td>{{.PID}}</td><td>{{.Start}}</td><td>{{.End}}</td><td>{{.Duration}}</td><td>{{if .Abnormal}}<span style="color:#b91c1c;font-weight:700;">code={{.ExitCode}}{{if .Signal}} signal={{.Signal}}{{end}} (abnormal)</span>{{else}}<span style="color:#166534;">code={{.ExitCode}}{{if .Signal}} signal={{.Signal}}{{end}} (normal)</span>{{end}}{{if .ErrMsg}}<br/><span style="color:#b91c1c;">{{.ErrMsg}}</span>{{end}}</td><td>{{if .CoreDumpPath}}{{.CoreDumpPath}}{{else}}-{{end}}</td><td>{{if .GDBLogPath}}<a href="/gdb-log?index={{.GDBLogIndex}}" target="_blank">{{.GDBLogPath}}</a>{{else}}-{{end}}</td><td>{{if .LastLogs}}<pre style="margin:0;white-space:pre-wrap;max-height:160px;overflow:auto;">{{.LastLogs}}</pre>{{else}}-{{end}}</td></tr>
 {{end}}</table>{{else}}<div class="empty">no exit records yet</div>{{end}}
 </section>
+
+<script>
+function resetCoverageData(){
+	fetch("/reset_coverage_data", {method: "POST"}).then(function(resp){
+		if(!resp.ok){
+			return resp.text().then(function(text){
+				throw new Error(text || ("HTTP " + resp.status));
+			});
+		}
+		alert("Effective in 10s");
+	}).catch(function(err){
+		alert("Reset coverage data failed: " + err.message);
+	});
+}
+</script>
 
 </body>
 </html>
