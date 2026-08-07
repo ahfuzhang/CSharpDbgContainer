@@ -18,3 +18,8 @@
 * html 页面进行美化
 * 支持在线 cpu-profiling
 * 支持在线 代码覆盖率
+* 当源码没有打包进去时：
+  - 编译的时候提供 EnableAllSources
+  - 使用工具，从 pdb 中还原出源码
+  - 很多的 pdb 与很多源码目录，对应 *.cobertura.xml 中的目录
+  

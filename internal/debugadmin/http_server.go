@@ -21,8 +21,6 @@ import (
 	"sync/atomic"
 	"text/template"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 //go:embed index.html.tpl
@@ -34,6 +32,11 @@ var indexHTMLTemplate = template.Must(template.New("index.html").Parse(indexHTML
 var threadInfoHTMLContent string
 
 var threadInfoHTMLTemplate = template.Must(template.New("threadinfo.html").Parse(threadInfoHTMLContent))
+
+//go:embed stack_info.html.tpl
+var stackInfoHTMLContent string
+
+var stackInfoHTMLTemplate = template.Must(template.New("stack_info.html").Parse(stackInfoHTMLContent))
 
 const traceIDLayout = "20060102150405.000"
 
@@ -91,6 +94,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/code_coverage/", h.handleCodeCoverage)
 	mux.HandleFunc("/reset_coverage_data", h.handleResetCoverageData)
 	mux.HandleFunc("/code_coverage_report/{uuid}/", h.handleCodeCoverageReport)
+	mux.HandleFunc("/code_coverage_xml/{name}", h.handleCodeCoverageXML)
 	mux.Handle("/speedscope/", http.StripPrefix("/speedscope/", http.FileServer(http.FS(h.speedscope))))
 }
 
@@ -101,6 +105,38 @@ type indexPageData struct {
 	WithCoverage      bool
 	Processes         []ProcessInfo
 	RunHistory        []runHistoryRow
+	CoverageHistory   []coverageHistoryRow
+}
+
+// coverageHistoryRow 是 CoverageRecord 格式化之后、可直接交给模板渲染的一行。
+type coverageHistoryRow struct {
+	Time         string
+	CoveragePct  string
+	LinesCovered int
+	LinesValid   int
+	XMLName      string
+	XMLURL       string
+	ReportURL    string
+}
+
+// buildCoverageHistoryRows 把代码覆盖率采集历史格式化为模板可直接渲染的行，
+// 按采集时间倒序排列（最近一次采集在最前面）。
+func buildCoverageHistoryRows(records []CoverageRecord) []coverageHistoryRow {
+	rows := make([]coverageHistoryRow, 0, len(records))
+	for i := len(records) - 1; i >= 0; i-- {
+		record := records[i]
+		name := filepath.Base(record.CoberturaFile)
+		rows = append(rows, coverageHistoryRow{
+			Time:         html.EscapeString(record.Timestamp.Format(time.RFC3339)),
+			CoveragePct:  fmt.Sprintf("%.2f%%", record.LineRate*100),
+			LinesCovered: record.LinesCovered,
+			LinesValid:   record.LinesValid,
+			XMLName:      html.EscapeString(name),
+			XMLURL:       "/code_coverage_xml/" + name,
+			ReportURL:    "/code_coverage_report/" + record.ReportID + "/",
+		})
+	}
+	return rows
 }
 
 // runHistoryRow 是 RunRecord 格式化之后、可直接交给模板渲染的一行。
@@ -131,6 +167,7 @@ func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
 		WithCoverage:      GlobalOptions.WithCoverage,
 		Processes:         listContainerProcesses(GlobalOptions.StartupParams),
 		RunHistory:        buildRunHistoryRows(h.history.Snapshot()),
+		CoverageHistory:   buildCoverageHistoryRows(SnapshotCoverageHistory()),
 	})
 }
 
@@ -214,104 +251,6 @@ func (h *AdminHandler) writeGDBLog(w http.ResponseWriter, r *http.Request, path 
 
 func isGDBLogPath(path string) bool {
 	return filepath.Dir(path) == os.TempDir() && gdbLogNamePattern.MatchString(filepath.Base(path))
-}
-
-var reportUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-
-// handleCodeCoverage 采集目标进程当前的代码覆盖率数据并生成 HTML 报告：
-//  1. dotnet-coverage snapshot 从正在运行的目标进程（通过 CoverageName 对应的 session）抓取一份 .coverage 快照；
-//  2. dotnet-coverage merge 把快照转换为 cobertura xml；
-//  3. reportgenerator 把 cobertura xml 渲染成 HTML 报告，输出到以随机 uuid 命名的目录；
-//     完成后跳转到 /code_coverage_report/{uuid}/ 展示报告。
-func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !GlobalOptions.WithCoverage {
-		http.Error(w, "code coverage is not enabled (missing -with.coverage)", http.StatusNotFound)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
-	defer cancel()
-
-	timestamp := time.Now().Format("20060102150405")
-	coverageFile := filepath.Join(os.TempDir(), timestamp+".coverage")
-	coberturaFile := filepath.Join(os.TempDir(), timestamp+".cobertura.xml")
-	reportID := uuid.NewString()
-	htmlDir := filepath.Join(os.TempDir(), reportID)
-
-	steps := []struct {
-		label string
-		cmd   *exec.Cmd
-	}{
-		{"dotnet-coverage snapshot", exec.CommandContext(ctx, "dotnet-coverage", "snapshot", "--output", coverageFile, GlobalOptions.CoverageName)},
-		{"dotnet-coverage merge", exec.CommandContext(ctx, "dotnet-coverage", "merge", coverageFile, "--output", coberturaFile, "--output-format", "cobertura")},
-		{"reportgenerator", exec.CommandContext(ctx, "reportgenerator", "-reports:"+coberturaFile, "-targetdir:"+htmlDir, "-reporttypes:Html")},
-	}
-	for _, step := range steps {
-		output, err := step.cmd.CombinedOutput()
-		if err != nil {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusInternalServerError)
-			renderCodeCoverageErrorHTML(w, step.label, err, string(output))
-			return
-		}
-	}
-
-	http.Redirect(w, r, "/code_coverage_report/"+reportID+"/", http.StatusFound)
-}
-
-// handleResetCoverageData 清空目标进程当前的代码覆盖率数据：
-// dotnet-coverage snapshot ${session_id} --output /dev/null --reset true
-// 命令行创建成功后立即返回，不等待其执行完成。
-func (h *AdminHandler) handleResetCoverageData(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !GlobalOptions.WithCoverage {
-		http.Error(w, "code coverage is not enabled (missing -with.coverage)", http.StatusNotFound)
-		return
-	}
-
-	cmd := exec.Command("dotnet-coverage", "snapshot", GlobalOptions.CoverageName, "--output", "/dev/null", "--reset", "true")
-	if err := cmd.Start(); err != nil {
-		http.Error(w, fmt.Sprintf("start dotnet-coverage snapshot failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	go func() { _ = cmd.Wait() }()
-
-	w.WriteHeader(http.StatusOK)
-}
-
-func renderCodeCoverageErrorHTML(w http.ResponseWriter, step string, err error, output string) {
-	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Code Coverage Error</title></head><body>
-<h2 style="color:#b91c1c">%s failed</h2>
-<pre>%s</pre>
-</body></html>`, html.EscapeString(step), html.EscapeString(strings.TrimSpace(output+"\n"+err.Error())))
-}
-
-// handleCodeCoverageReport 把 /code_coverage_report/{uuid}/... 映射到 reportgenerator
-// 输出的报告目录 /tmp/{uuid}/，供浏览器直接访问生成好的 HTML 报告。
-func (h *AdminHandler) handleCodeCoverageReport(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	reportID := r.PathValue("uuid")
-	if !reportUUIDPattern.MatchString(reportID) {
-		http.Error(w, "invalid report id", http.StatusBadRequest)
-		return
-	}
-	dir := filepath.Join(os.TempDir(), reportID)
-	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-		http.NotFound(w, r)
-		return
-	}
-	prefix := "/code_coverage_report/" + reportID + "/"
-	http.StripPrefix(prefix, http.FileServer(http.Dir(dir))).ServeHTTP(w, r)
 }
 
 func acceptsGzip(acceptEncoding string) bool {
@@ -636,76 +575,61 @@ func parseStackBlocks(raw string) ([]stackThreadBlock, []string) {
 	return threads, misc
 }
 
-func renderStackHTML(w http.ResponseWriter, startupOutput, stackOutput, stderrOutput string, runErr error) {
+type stackPageData struct {
+	StartupOutput string
+	NoData        bool
+	Threads       []stackThreadRow
+	Misc          string
+	StderrOutput  string
+	Error         string
+}
+
+type stackThreadRow struct {
+	Header string
+	Frames []string
+	Extra  []string
+}
+
+// buildStackPageData turns raw "bt all" output into rows the template can render
+// directly. thread.frames are rendered to HTML via formatStackFrameHTML (safe markup
+// built entirely from escaped fragments); everything else is escaped plain text.
+func buildStackPageData(startupOutput, stackOutput, stderrOutput string, runErr error) stackPageData {
 	threads, misc := parseStackBlocks(stackOutput)
 
-	_, _ = io.WriteString(w, `<!doctype html><html><head><meta charset="utf-8"><title>Stack</title><style>
-body{margin:0;padding:24px;background:#f3f4f6;color:#111827;font-family:Consolas,Monaco,monospace;}
-.wrap{max-width:1200px;margin:0 auto;background:#ffffff;border:1px solid #d1d5db;border-radius:12px;padding:18px 20px;}
-h1{margin:0 0 12px 0;font-size:20px;}
-h2{margin:18px 0 8px 0;font-size:14px;color:#1f2937;}
-.startup{margin:0;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px;font-size:12px;color:#6b7280;white-space:pre-wrap;line-height:1.35;}
-.thread{margin-top:14px;}
-.thread-title{font-weight:700;color:#b91c1c;}
-.thread-stack{margin-top:6px;margin-left:16px;padding-left:10px;border-left:2px solid #d1d5db;}
-.frame,.thread-extra{white-space:pre-wrap;line-height:1.4;}
-.frame-idx{color:#374151;}
-.frame-ptr{color:#9ca3af;}
-.frame-dll{color:#6b7280;}
-.frame-sep{color:#6b7280;}
-.frame-func{color:#111827;}
-.frame-at{color:#6b7280;}
-.frame-path{color:#0f766e;}
-.frame-file{color:#1d4ed8;font-weight:700;}
-.thread-extra{color:#374151;}
-.misc,.stderr,.error{margin-top:16px;white-space:pre-wrap;padding:10px;border-radius:8px;}
-.misc{background:#eef2ff;border:1px solid #c7d2fe;color:#1f2937;}
-.stderr{background:#fff7ed;border:1px solid #fed7aa;color:#7c2d12;}
-.error{background:#fee2e2;border:1px solid #fecaca;color:#991b1b;}
-</style></head><body><div class="wrap"><h1>Stack Dump</h1>`)
-
-	startupTrimmed := strings.TrimSpace(startupOutput)
-	if startupTrimmed != "" {
-		_, _ = io.WriteString(w, `<h2>netcoredbg stdout (before "bt all")</h2>`)
-		_, _ = fmt.Fprintf(w, `<pre class="startup">%s</pre>`, html.EscapeString(startupTrimmed))
-	}
-
-	if len(threads) == 0 && strings.TrimSpace(stackOutput) == "" {
-		_, _ = io.WriteString(w, `<div class="misc">No stack data returned.</div>`)
-	}
-
+	rows := make([]stackThreadRow, 0, len(threads))
 	for _, thread := range threads {
-		_, _ = io.WriteString(w, `<div class="thread">`)
-		_, _ = fmt.Fprintf(w, `<div class="thread-title">%s</div>`, html.EscapeString(thread.header))
-		if len(thread.frames) > 0 || len(thread.extra) > 0 {
-			_, _ = io.WriteString(w, `<div class="thread-stack">`)
-			for _, frame := range thread.frames {
-				_, _ = fmt.Fprintf(w, `<div class="frame">%s</div>`, formatStackFrameHTML(frame))
-			}
-			for _, detail := range thread.extra {
-				_, _ = fmt.Fprintf(w, `<div class="thread-extra">%s</div>`, html.EscapeString(detail))
-			}
-			_, _ = io.WriteString(w, `</div>`)
+		frames := make([]string, 0, len(thread.frames))
+		for _, frame := range thread.frames {
+			frames = append(frames, formatStackFrameHTML(frame))
 		}
-		_, _ = io.WriteString(w, `</div>`)
+		extra := make([]string, 0, len(thread.extra))
+		for _, detail := range thread.extra {
+			extra = append(extra, html.EscapeString(detail))
+		}
+		rows = append(rows, stackThreadRow{
+			Header: html.EscapeString(thread.header),
+			Frames: frames,
+			Extra:  extra,
+		})
 	}
 
-	if len(misc) > 0 {
-		_, _ = io.WriteString(w, `<h2>Other Output</h2>`)
-		_, _ = fmt.Fprintf(w, `<pre class="misc">%s</pre>`, html.EscapeString(strings.Join(misc, "\n")))
-	}
-
-	stderrTrimmed := strings.TrimSpace(stderrOutput)
-	if stderrTrimmed != "" {
-		_, _ = io.WriteString(w, `<h2>netcoredbg stderr</h2>`)
-		_, _ = fmt.Fprintf(w, `<pre class="stderr">%s</pre>`, html.EscapeString(stderrTrimmed))
-	}
-
+	errMsg := ""
 	if runErr != nil {
-		_, _ = fmt.Fprintf(w, `<div class="error">stack command error: %s</div>`, html.EscapeString(runErr.Error()))
+		errMsg = html.EscapeString(runErr.Error())
 	}
 
-	_, _ = io.WriteString(w, `</div></body></html>`)
+	return stackPageData{
+		StartupOutput: html.EscapeString(strings.TrimSpace(startupOutput)),
+		NoData:        len(threads) == 0 && strings.TrimSpace(stackOutput) == "",
+		Threads:       rows,
+		Misc:          html.EscapeString(strings.Join(misc, "\n")),
+		StderrOutput:  html.EscapeString(strings.TrimSpace(stderrOutput)),
+		Error:         errMsg,
+	}
+}
+
+func renderStackHTML(w http.ResponseWriter, startupOutput, stackOutput, stderrOutput string, runErr error) {
+	_ = stackInfoHTMLTemplate.Execute(w, buildStackPageData(startupOutput, stackOutput, stderrOutput, runErr))
 }
 
 func formatStackFrameHTML(frame string) string {

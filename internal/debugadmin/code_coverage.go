@@ -1,0 +1,201 @@
+package debugadmin
+
+import (
+	"context"
+	"encoding/xml"
+	"fmt"
+	"html"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+var reportUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+var coberturaFileNamePattern = regexp.MustCompile(`^\d{14}\.cobertura\.xml$`)
+
+const maxCoverageHistory = 20
+
+// CoverageRecord 记录一次代码覆盖率采集的结果，用于在首页展示历史趋势。
+type CoverageRecord struct {
+	Timestamp     time.Time
+	CoberturaFile string
+	ReportID      string
+	LineRate      float64
+	LinesCovered  int
+	LinesValid    int
+}
+
+var (
+	coverageHistoryMu sync.Mutex
+	coverageHistory   []CoverageRecord
+)
+
+func appendCoverageHistory(rec CoverageRecord) {
+	coverageHistoryMu.Lock()
+	defer coverageHistoryMu.Unlock()
+	coverageHistory = append(coverageHistory, rec)
+	if len(coverageHistory) > maxCoverageHistory {
+		coverageHistory = coverageHistory[len(coverageHistory)-maxCoverageHistory:]
+	}
+}
+
+// SnapshotCoverageHistory 返回当前代码覆盖率历史记录的一份拷贝，供首页模板渲染。
+func SnapshotCoverageHistory() []CoverageRecord {
+	coverageHistoryMu.Lock()
+	defer coverageHistoryMu.Unlock()
+	out := make([]CoverageRecord, len(coverageHistory))
+	copy(out, coverageHistory)
+	return out
+}
+
+type coberturaCoverageXML struct {
+	XMLName      xml.Name `xml:"coverage"`
+	LineRate     float64  `xml:"line-rate,attr"`
+	LinesCovered int      `xml:"lines-covered,attr"`
+	LinesValid   int      `xml:"lines-valid,attr"`
+}
+
+// recordCoverageResult 解析 cobertura xml 里的总体覆盖率数据（line-rate/lines-covered/lines-valid），
+// 追加到全局历史记录中，超过 maxCoverageHistory 条后丢弃最旧的一条。
+func recordCoverageResult(coberturaFile, reportID string, timestamp time.Time) {
+	data, err := os.ReadFile(coberturaFile)
+	if err != nil {
+		return
+	}
+	var cov coberturaCoverageXML
+	if err := xml.Unmarshal(data, &cov); err != nil {
+		return
+	}
+	appendCoverageHistory(CoverageRecord{
+		Timestamp:     timestamp,
+		CoberturaFile: coberturaFile,
+		ReportID:      reportID,
+		LineRate:      cov.LineRate,
+		LinesCovered:  cov.LinesCovered,
+		LinesValid:    cov.LinesValid,
+	})
+}
+
+// handleCodeCoverage 采集目标进程当前的代码覆盖率数据并生成 HTML 报告：
+//  1. dotnet-coverage snapshot 从正在运行的目标进程（通过 CoverageName 对应的 session）抓取一份 .coverage 快照；
+//  2. dotnet-coverage merge 把快照转换为 cobertura xml；
+//  3. reportgenerator 把 cobertura xml 渲染成 HTML 报告，输出到以随机 uuid 命名的目录；
+//     完成后跳转到 /code_coverage_report/{uuid}/ 展示报告。
+func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !GlobalOptions.WithCoverage {
+		http.Error(w, "code coverage is not enabled (missing -with.coverage)", http.StatusNotFound)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+
+	timestamp := time.Now().Format("20060102150405")
+	coverageFile := filepath.Join(os.TempDir(), timestamp+".coverage")
+	coberturaFile := filepath.Join(os.TempDir(), timestamp+".cobertura.xml")
+	reportID := uuid.NewString()
+	htmlDir := filepath.Join(os.TempDir(), reportID)
+
+	steps := []struct {
+		label string
+		cmd   *exec.Cmd
+	}{
+		{"dotnet-coverage snapshot", exec.CommandContext(ctx, "dotnet-coverage", "snapshot", "--output", coverageFile, GlobalOptions.CoverageName)},
+		{"dotnet-coverage merge", exec.CommandContext(ctx, "dotnet-coverage", "merge", coverageFile, "--output", coberturaFile, "--output-format", "cobertura")},
+		{"reportgenerator", exec.CommandContext(ctx, "reportgenerator", "-reports:"+coberturaFile, "-targetdir:"+htmlDir, "-reporttypes:Html")},
+	}
+	for _, step := range steps {
+		output, err := step.cmd.CombinedOutput()
+		if err != nil {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusInternalServerError)
+			renderCodeCoverageErrorHTML(w, step.label, err, string(output))
+			return
+		}
+	}
+	go recordCoverageResult(coberturaFile, reportID, time.Now())
+	http.Redirect(w, r, "/code_coverage_report/"+reportID+"/", http.StatusFound)
+}
+
+// handleResetCoverageData 清空目标进程当前的代码覆盖率数据：
+// dotnet-coverage snapshot ${session_id} --output /dev/null --reset true
+// 命令行创建成功后立即返回，不等待其执行完成。
+func (h *AdminHandler) handleResetCoverageData(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !GlobalOptions.WithCoverage {
+		http.Error(w, "code coverage is not enabled (missing -with.coverage)", http.StatusNotFound)
+		return
+	}
+
+	cmd := exec.Command("dotnet-coverage", "snapshot", GlobalOptions.CoverageName, "--output", "/dev/null", "--reset", "true")
+	if err := cmd.Start(); err != nil {
+		http.Error(w, fmt.Sprintf("start dotnet-coverage snapshot failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	go func() { _ = cmd.Wait() }()
+
+	w.WriteHeader(http.StatusOK)
+}
+
+func renderCodeCoverageErrorHTML(w http.ResponseWriter, step string, err error, output string) {
+	_, _ = fmt.Fprintf(w, `<!doctype html><html><head><meta charset="utf-8"><title>Code Coverage Error</title></head><body>
+<h2 style="color:#b91c1c">%s failed</h2>
+<pre>%s</pre>
+</body></html>`, html.EscapeString(step), html.EscapeString(strings.TrimSpace(output+"\n"+err.Error())))
+}
+
+// handleCodeCoverageReport 把 /code_coverage_report/{uuid}/... 映射到 reportgenerator
+// 输出的报告目录 /tmp/{uuid}/，供浏览器直接访问生成好的 HTML 报告。
+func (h *AdminHandler) handleCodeCoverageReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	reportID := r.PathValue("uuid")
+	if !reportUUIDPattern.MatchString(reportID) {
+		http.Error(w, "invalid report id", http.StatusBadRequest)
+		return
+	}
+	dir := filepath.Join(os.TempDir(), reportID)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	prefix := "/code_coverage_report/" + reportID + "/"
+	http.StripPrefix(prefix, http.FileServer(http.Dir(dir))).ServeHTTP(w, r)
+}
+
+// handleCodeCoverageXML 提供 cobertura xml 文件下载，文件名限定为 handleCodeCoverage 生成的格式，
+// 避免任意路径读取。
+func (h *AdminHandler) handleCodeCoverageXML(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := r.PathValue("name")
+	if !coberturaFileNamePattern.MatchString(name) {
+		http.Error(w, "invalid file name", http.StatusBadRequest)
+		return
+	}
+	path := filepath.Join(os.TempDir(), name)
+	if _, err := os.Stat(path); err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	http.ServeFile(w, r, path)
+}

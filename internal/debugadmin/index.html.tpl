@@ -47,6 +47,7 @@
 	.section-links{background:#f0fdf4;}
 	.section-processes{background:#fefce8;}
 	.section-history{background:#fdf2f8;}
+	.section-coverage{background:#ecfeff;}
 	a{color:#2563eb;}
 	.links a{
 		display:inline-block;
@@ -132,6 +133,16 @@ function profile(){
 {{range .RunHistory}}<tr><td>{{.Index}}</td><td>{{.PID}}</td><td>{{.Start}}</td><td>{{.End}}</td><td>{{.Duration}}</td><td>{{if .Abnormal}}<span style="color:#b91c1c;font-weight:700;">code={{.ExitCode}}{{if .Signal}} signal={{.Signal}}{{end}} (abnormal)</span>{{else}}<span style="color:#166534;">code={{.ExitCode}}{{if .Signal}} signal={{.Signal}}{{end}} (normal)</span>{{end}}{{if .ErrMsg}}<br/><span style="color:#b91c1c;">{{.ErrMsg}}</span>{{end}}</td><td>{{if .CoreDumpPath}}{{.CoreDumpPath}}{{else}}-{{end}}</td><td>{{if .GDBLogPath}}<a href="/gdb-log?index={{.GDBLogIndex}}" target="_blank">{{.GDBLogPath}}</a>{{else}}-{{end}}</td><td>{{if .LastLogs}}<pre style="margin:0;white-space:pre-wrap;max-height:160px;overflow:auto;">{{.LastLogs}}</pre>{{else}}-{{end}}</td></tr>
 {{end}}</table>{{else}}<div class="empty">no exit records yet</div>{{end}}
 </section>
+
+{{if .WithCoverage}}
+<section class="section-coverage">
+<h2>Code Coverage History</h2>
+{{if .CoverageHistory}}<table>
+<tr><th>Collected At</th><th>Coverage</th><th>Lines Covered</th><th>Lines Valid</th><th>XML</th><th>Report</th></tr>
+{{range .CoverageHistory}}<tr><td>{{.Time}}</td><td>{{.CoveragePct}}</td><td>{{.LinesCovered}}</td><td>{{.LinesValid}}</td><td><a href="{{.XMLURL}}">{{.XMLName}}</a></td><td><a href="{{.ReportURL}}" target="_blank">report</a></td></tr>
+{{end}}</table>{{else}}<div class="empty">no coverage records yet</div>{{end}}
+</section>
+{{end}}
 
 <script>
 function resetCoverageData(){

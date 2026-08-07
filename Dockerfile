@@ -5,6 +5,7 @@ ARG OSSUTIL_VERSION=2.3.0
 ARG NETCOREDBG_VERSION=3.1.3-1062
 ARG VECTOR_VERSION=0.53.0
 ARG VSDBG_VERSION=18.7.10521.2
+ARG PDB_TO_SOURCE_SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0
 
 # 阶段：下载 speedscope 静态资源。
 # 用于后续把火焰图前端文件 embed 进 DebugAdmin 二进制。
@@ -102,6 +103,21 @@ RUN mkdir -p /opt/dotnet-tools \
     else \
       ${DOTNET_ROOT}/dotnet tool install dotnet-reportgenerator-globaltool --tool-path /opt/dotnet-tools; \
     fi
+
+# 阶段：编译 pdb_to_source 工具。
+# 使用 dotnet 10 SDK 镜像，产出 AOT + self-contained 的单文件二进制。
+FROM ${PDB_TO_SOURCE_SDK_IMAGE} AS pdb_to_source_builder
+WORKDIR /src
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends clang zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY tools/pdb_to_source ./
+RUN dotnet publish -c Release -r linux-x64 \
+    --self-contained true \
+    -p:PublishAot=true \
+    -o /out
 
 # 阶段：安装 vsdbg 调试器。
 # 这里产出 VS 调试协议用的 vsdbg 二进制目录。
@@ -220,6 +236,7 @@ COPY --chown=abc:abc ./CodeServer/settings.json /config/.local/share/code-server
 # DebugAdmin 是最常变化的内容，必须保持为最后一个文件系统层。
 # 这样仅修改 Go 代码时，前面的 .NET SDK、调试器和 code-server 扩展层仍可复用。
 COPY --from=debugadmin_builder /out/DebugAdmin /usr/bin/DebugAdmin
+COPY --from=pdb_to_source_builder /out/pdb_to_source /usr/bin/pdb_to_source
 
 USER abc
 
