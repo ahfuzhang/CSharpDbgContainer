@@ -1,0 +1,60 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.2.9 Chrome/140.0.7339.249 Electron/38.7.2 Safari/537.36" version="29.2.9">
+  <diagram name="Page-1" id="qjgZtJRC8e7zMGvGEJAR">
+    <mxGraphModel dx="2894" dy="1210" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3300" pageHeight="4681" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-4" edge="1" parent="1" source="7rLZzyv3zkh8AzR-USCL-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="7rLZzyv3zkh8AzR-USCL-2" value="启动">
+          <mxGeometry relative="1" x="-0.25" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-10" edge="1" parent="1" source="7rLZzyv3zkh8AzR-USCL-1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" target="7rLZzyv3zkh8AzR-USCL-9" value="每次请求时启动">
+          <mxGeometry relative="1" x="0.3684" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-1" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" value="DebugAdmin" vertex="1">
+          <mxGeometry height="60" width="120" x="880" y="460" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-5" edge="1" parent="1" source="7rLZzyv3zkh8AzR-USCL-2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" target="7rLZzyv3zkh8AzR-USCL-3" value="启动">
+          <mxGeometry relative="1" x="-0.2857" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-2" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="dotnet-coverage collect" vertex="1">
+          <mxGeometry height="60" width="120" x="1020" y="570" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-3" parent="1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;" value="TargetServer.dll" vertex="1">
+          <mxGeometry height="60" width="120" x="1150" y="670" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-6" parent="1" style="ellipse;whiteSpace=wrap;html=1;" value="管理端口" vertex="1">
+          <mxGeometry height="30" width="70" x="980" y="460" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-8" edge="1" parent="1" source="7rLZzyv3zkh8AzR-USCL-7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" target="7rLZzyv3zkh8AzR-USCL-6">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-7" parent="1" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" value="&amp;nbsp;developer" vertex="1">
+          <mxGeometry height="60" width="30" x="1240" y="445" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-11" edge="1" parent="1" source="7rLZzyv3zkh8AzR-USCL-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" target="7rLZzyv3zkh8AzR-USCL-2" value="采集覆盖率">
+          <mxGeometry relative="1" x="-0.4444" y="5" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-9" parent="1" style="rounded=1;whiteSpace=wrap;html=1;" value="dotnet-coverage snapshot" vertex="1">
+          <mxGeometry height="60" width="120" x="720" y="585" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-12" parent="1" style="shape=note;whiteSpace=wrap;html=1;backgroundOutline=1;darkOpacity=0.05;" value="覆盖率&lt;br&gt;&amp;nbsp;html" vertex="1">
+          <mxGeometry height="100" width="70" x="750" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-13" edge="1" parent="1" source="7rLZzyv3zkh8AzR-USCL-9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;exitX=0;exitY=0.5;exitDx=0;exitDy=0;" target="7rLZzyv3zkh8AzR-USCL-12" value="reportgenerator">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="7rLZzyv3zkh8AzR-USCL-14" edge="1" parent="1" source="7rLZzyv3zkh8AzR-USCL-7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0;entryDx=70;entryDy=65;entryPerimeter=0;exitX=0.5;exitY=0;exitDx=0;exitDy=0;exitPerimeter=0;" target="7rLZzyv3zkh8AzR-USCL-12">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -6,6 +6,33 @@ https://hub.docker.com/repository/docker/ahfuzhang/csharp-dbg-all-in-one/general
 
 <h1><font color=red>Never use it in your production environment.</font></h1>
 
+# Run mode
+
+## Code coverage mode
+
+![](./doc/代码覆盖率模式.png)
+
+## Gdb mode
+
+![](./doc/gdb%20调试模式.png)
+
+# Debug Admin UI
+
+![](./doc/admin_ui.png)
+
+* 1 show log: open a new tab to see latest log
+* 2 show stack: show stack info
+* 3 CPU Profiling
+  - 3.1 Set collection time
+  - 3.2 click button to start collect
+  - 3.3 open a new tab to show history data
+* 4 show all process in current container
+* 5 to get code coverage data
+  - 5.1 open a new tab to show code coverage report
+  - 5.2 reset code coverage data
+* 6 show restart log
+* 7 show code coverage history  
+
 # How to use
 
 * Build your C# backend
