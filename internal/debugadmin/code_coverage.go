@@ -2,6 +2,7 @@ package debugadmin
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"html"
@@ -24,17 +25,23 @@ const maxCoverageHistory = 20
 
 // CoverageRecord 记录一次代码覆盖率采集的结果，用于在首页展示历史趋势。
 type CoverageRecord struct {
-	Timestamp     time.Time
-	CoberturaFile string
-	ReportID      string
-	LineRate      float64
-	LinesCovered  int
-	LinesValid    int
+	Timestamp     time.Time `json:"timestamp"`
+	CoberturaFile string    `json:"cobertura_file"`
+	ReportID      string    `json:"report_id"`
+	LineRate      float64   `json:"line_rate"`
+	LinesCovered  int       `json:"lines_covered"`
+	LinesValid    int       `json:"lines_valid"`
 }
 
 var (
 	coverageHistoryMu sync.Mutex
 	coverageHistory   []CoverageRecord
+
+	// coverageRunMu 保证同一时刻只有一次采集在执行。
+	// handleCodeCoverage 用同一秒的时间戳生成临时文件名（coverageFile/coberturaFile），
+	// 如果两个请求并发执行，会互相覆盖对方的临时文件，导致 recordCoverageResult
+	// 读取/解析失败而静默丢弃这次采集结果，使得历史记录数少于 maxCoverageHistory。
+	coverageRunMu sync.Mutex
 )
 
 func appendCoverageHistory(rec CoverageRecord) {
@@ -98,6 +105,12 @@ func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	if !coverageRunMu.TryLock() {
+		http.Error(w, "another code coverage collection is already in progress, please retry later", http.StatusConflict)
+		return
+	}
+	defer coverageRunMu.Unlock()
+
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 
@@ -124,7 +137,7 @@ func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
-	go recordCoverageResult(coberturaFile, reportID, time.Now())
+	recordCoverageResult(coberturaFile, reportID, time.Now())
 	http.Redirect(w, r, "/code_coverage_report/"+reportID+"/", http.StatusFound)
 }
 
@@ -198,4 +211,27 @@ func (h *AdminHandler) handleCodeCoverageXML(w http.ResponseWriter, r *http.Requ
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	http.ServeFile(w, r, path)
+}
+
+// handleGetCodeCoverageList 以 json 格式返回当前所有代码覆盖率历史记录（最新的排在最前面）。
+func (h *AdminHandler) handleGetCodeCoverageList(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !GlobalOptions.WithCoverage {
+		http.Error(w, "code coverage is not enabled (missing -with.coverage)", http.StatusNotFound)
+		return
+	}
+
+	records := SnapshotCoverageHistory()
+	list := make([]CoverageRecord, len(records))
+	for i, record := range records {
+		list[len(records)-1-i] = record
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(list); err != nil {
+		http.Error(w, "encode response failed: "+err.Error(), http.StatusInternalServerError)
+	}
 }

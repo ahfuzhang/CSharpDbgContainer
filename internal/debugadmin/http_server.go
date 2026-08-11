@@ -95,6 +95,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/reset_coverage_data", h.handleResetCoverageData)
 	mux.HandleFunc("/code_coverage_report/{uuid}/", h.handleCodeCoverageReport)
 	mux.HandleFunc("/code_coverage_xml/{name}", h.handleCodeCoverageXML)
+	mux.HandleFunc("/get_code_coverage_list", h.handleGetCodeCoverageList)
 	mux.Handle("/speedscope/", http.StripPrefix("/speedscope/", http.FileServer(http.FS(h.speedscope))))
 }
 

@@ -117,6 +117,14 @@ func (p *TargetProcess) waitForExit() {
 	p.broker.Broadcast(message)
 	if p.history != nil {
 		exitCode, signal, abnormal := classifyExit(err)
+		if GlobalOptions.WithCoverage && !abnormal {
+			// dotnet-coverage collect 是被调试进程的外壳进程：即使它包裹的目标进程被信号杀死
+			// 或者非零退出，dotnet-coverage 自身也总是返回 0（已知限制，见
+			// https://github.com/microsoft/vstest/issues/4094）。因此这种模式下无法用外壳
+			// 进程的退出码判断目标进程是否正常退出，这里统一按异常处理，
+			// 保证现场日志被记录、auto.restart 能够正常触发重启。
+			abnormal = true
+		}
 		record := RunRecord{
 			PID:        p.pid,
 			StartTime:  p.startTime,
