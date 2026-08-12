@@ -85,6 +85,11 @@
 		color:var(--muted);
 		font-style:italic;
 	}
+	.col-cmdline{
+		word-break:break-all;
+		overflow-wrap:anywhere;
+		white-space:normal;
+	}
 </style>
 </head>
 <body>
@@ -115,8 +120,8 @@ function profile(){
 <section class="section-processes">
 <h2>Container Processes</h2>
 <table>
-<tr><th>PID</th><th>Uptime</th><th>Memory</th><th>Thread Count</th><th>Cmdline</th><th>Actions</th></tr>
-{{range .Processes}}<tr{{if .IsTarget}} style="background-color:#fde68a;"{{end}}><td>{{.PID}}</td><td>{{.Uptime}}</td><td>{{.Memory}}</td><td>{{.ThreadCount}}</td><td>{{.Cmdline}}</td><td>
+<tr><th>PID</th><th>Uptime</th><th>Memory</th><th>Thread Count</th><th class="col-cmdline">Cmdline</th><th>Actions</th></tr>
+{{range .Processes}}<tr{{if .IsTarget}} style="background-color:#fde68a;"{{end}}><td>{{.PID}}</td><td>{{.Uptime}}</td><td>{{.Memory}}</td><td>{{.ThreadCount}}</td><td class="col-cmdline">{{.Cmdline}}</td><td>
 {{if .IsTarget}}
 {{if $.WithCoverage}}
   <input type="button" value="Show Code Coverage" onclick="window.open('/code_coverage/', '_blank')"/>
