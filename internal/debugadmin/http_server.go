@@ -317,7 +317,7 @@ func (h *AdminHandler) handleStack(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
-	startupOutput, stackOutput, stderrOutput, err := collectStackOutput(ctx, h.target.Load().PID())
+	startupOutput, stackOutput, stderrOutput, err := collectStackOutput(ctx, h.resolveTargetPID())
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -722,11 +722,11 @@ func formatStackFrameHTML(frame string) string {
 	return b.String()
 }
 
-// profilingTargetPID 返回用于 cpu profiling 的真实目标进程 pid。
+// resolveTargetPID 返回真正的目标进程 pid。
 // 当以 --with.gdb 或 --with.coverage 启动时，h.target.PID() 是 gdb / dotnet-coverage
 // 外壳进程的 pid，必须通过 GlobalOptions.StartupParams 在进程树中定位真正的目标进程，
-// 否则 dotnet-trace 会挂到外壳进程上，采集不到目标进程的 cpu 数据。
-func (h *AdminHandler) profilingTargetPID() int {
+// 否则 dotnet-trace / netcoredbg 会挂到外壳进程上，采集不到目标进程的数据。
+func (h *AdminHandler) resolveTargetPID() int {
 	pid := h.target.Load().PID()
 	if !GlobalOptions.WithGDB && !GlobalOptions.WithCoverage {
 		return pid
@@ -769,7 +769,7 @@ func (h *AdminHandler) handleTrace(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 		stderrLog := &bytes.Buffer{}
-		cmd := BuildTraceCommand(h.profilingTargetPID(), seconds, outputPath, profile)
+		cmd := BuildTraceCommand(h.resolveTargetPID(), seconds, outputPath, profile)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = io.MultiWriter(os.Stderr, stderrLog)
 		if err := cmd.Start(); err != nil {
