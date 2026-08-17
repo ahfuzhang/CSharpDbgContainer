@@ -93,7 +93,10 @@ func recordCoverageResult(coberturaFile, reportID string, timestamp time.Time) {
 // handleCodeCoverage 采集目标进程当前的代码覆盖率数据并生成 HTML 报告：
 //  1. dotnet-coverage snapshot 从正在运行的目标进程（通过 CoverageName 对应的 session）抓取一份 .coverage 快照；
 //  2. dotnet-coverage merge 把快照转换为 cobertura xml；
-//  3. reportgenerator 把 cobertura xml 渲染成 HTML 报告，输出到以随机 uuid 命名的目录；
+//  3. cleanCoberturaCompilerGeneratedClasses 把 cobertura xml 中编译器生成的类
+//     （async 状态机、lambda 缓存、闭包）合并进父类，修复 reportgenerator 对泛型类
+//     渲染 async 方法覆盖率丢失/竞态的问题（见 cobertura_merge.go）；
+//  4. reportgenerator 把 cobertura xml 渲染成 HTML 报告，输出到以随机 uuid 命名的目录；
 //     完成后跳转到 /code_coverage_report/{uuid}/ 展示报告。
 func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -135,6 +138,14 @@ func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request
 			w.WriteHeader(http.StatusInternalServerError)
 			renderCodeCoverageErrorHTML(w, step.label, err, string(output))
 			return
+		}
+		if step.label == "dotnet-coverage merge" {
+			if err := cleanCoberturaCompilerGeneratedClasses(coberturaFile); err != nil {
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusInternalServerError)
+				renderCodeCoverageErrorHTML(w, "merge compiler-generated classes in cobertura xml", err, "")
+				return
+			}
 		}
 	}
 	recordCoverageResult(coberturaFile, reportID, time.Now())
