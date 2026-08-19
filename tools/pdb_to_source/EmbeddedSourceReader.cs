@@ -4,13 +4,13 @@ using System.Text;
 
 namespace PdbToSource;
 
-internal readonly record struct ExtractResult(int TotalDocuments, int ExtractedCount, int SkippedCount);
+internal readonly record struct ExtractResult(int TotalDocuments, int ExtractedCount, int SkippedCount, int SkippedObjCount);
 
 internal static class EmbeddedSourceReader
 {
     private static readonly Guid EmbeddedSourceGuid = new("0E8A571B-6926-466E-B4AD-8AB04611F5FE");
 
-    public static ExtractResult Extract(string pdbPath, string targetDir)
+    public static ExtractResult Extract(string pdbPath, string targetDir, bool skipObj = false)
     {
         using var fs = File.OpenRead(pdbPath);
         using var provider = MetadataReaderProvider.FromPortablePdbStream(fs);
@@ -18,6 +18,7 @@ internal static class EmbeddedSourceReader
 
         int total = 0;
         int extracted = 0;
+        int skippedObj = 0;
 
         foreach (var docHandle in reader.Documents)
         {
@@ -25,20 +26,40 @@ internal static class EmbeddedSourceReader
             var doc = reader.GetDocument(docHandle);
             var name = reader.GetString(doc.Name);
 
+            var relativePath = name.Replace('\\', '/').TrimStart('/');
+
+            if (skipObj && IsUnderObjDirectory(relativePath))
+            {
+                skippedObj++;
+                continue;
+            }
+
             var source = TryReadEmbeddedSource(reader, docHandle);
             if (source == null)
             {
                 continue;
             }
 
-            var relativePath = name.Replace('\\', '/').TrimStart('/');
             var fullPath = Path.Combine(targetDir, relativePath);
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
             File.WriteAllText(fullPath, source);
             extracted++;
         }
 
-        return new ExtractResult(total, extracted, total - extracted);
+        return new ExtractResult(total, extracted, total - extracted - skippedObj, skippedObj);
+    }
+
+    private static bool IsUnderObjDirectory(string relativePath)
+    {
+        foreach (var segment in relativePath.Split('/'))
+        {
+            if (segment.Equals("obj", StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string? TryReadEmbeddedSource(MetadataReader reader, DocumentHandle docHandle)
