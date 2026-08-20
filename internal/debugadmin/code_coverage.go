@@ -151,7 +151,7 @@ func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if step.label == "dotnet-coverage merge" {
-			if err := cleanCoberturaCompilerGeneratedClasses(coberturaFile); err != nil {
+			if err := cleanCoberturaCompilerGeneratedClasses(coberturaFile, h.resolveTargetPID()); err != nil {
 				w.Header().Set("Content-Type", "text/html; charset=utf-8")
 				w.WriteHeader(http.StatusInternalServerError)
 				renderCodeCoverageErrorHTML(w, "merge compiler-generated classes in cobertura xml", err, "")

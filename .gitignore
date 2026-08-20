@@ -1,3 +1,4 @@
 /build/
 /speedscope/
 Makefile.linux
+/tools/pdb_to_source/Makefile

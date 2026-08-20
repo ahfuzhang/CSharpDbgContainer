@@ -15,10 +15,15 @@ package debugadmin
 import (
 	"encoding/xml"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
+
+	"github.com/ahfuzhang/CSharpDbgContainer/internal/pdb"
 )
 
 type coberturaDoc struct {
@@ -89,7 +94,7 @@ type coberturaLine struct {
 
 var (
 	// stateMachineClassPattern 匹配 async/iterator 状态机类名，例如
-	// "BetFlow.<TriggerAsync>d__5<TRequest, TResponse>"，捕获父类名与原始方法名。
+	// "Flow.<TriggerAsync>d__5<TRequest, TResponse>"，捕获父类名与原始方法名。
 	stateMachineClassPattern = regexp.MustCompile(`^(.+?)\.<([^>]+)>d__\d+(<[^>]+>)?$`)
 	// lambdaCacheClassPattern 匹配 lambda 缓存类名，例如 "Foo.<>c"。
 	lambdaCacheClassPattern = regexp.MustCompile(`^(.+?)\.<>c(<[^>]+>)?$`)
@@ -234,7 +239,10 @@ func isCoveragePackageExcluded(name string) bool {
 // DisplayName 相同而产生的渲染竞态。
 // 处理前会先按 GlobalOptions.CoverageOpts.ExcludeRegexpsForCoverage 过滤掉匹配的 package，
 // 使其不出现在最终的 html report 中。
-func mergeCompilerGeneratedClassesIntoParents(data []byte) ([]byte, error) {
+// 当 GlobalOptions.CoverageOpts.SourceFromPDB 打开时，还会为 filename 在本地磁盘上不
+// 存在的 class，尝试从 pid 对应目标进程工作目录下的 .pdb 文件里恢复源码（见
+// fixMissingSourceFilenamesFromPDB），使 reportgenerator 生成的报表里也能展示源码。
+func mergeCompilerGeneratedClassesIntoParents(data []byte, pid int) ([]byte, error) {
 	var doc coberturaDoc
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse cobertura xml: %w", err)
@@ -285,6 +293,10 @@ func mergeCompilerGeneratedClassesIntoParents(data []byte) ([]byte, error) {
 		recomputeClassLineRate(cls)
 	}
 
+	if GlobalOptions != nil && GlobalOptions.CoverageOpts.SourceFromPDB {
+		fixMissingSourceFilenamesFromPDB(doc.Packages.Package, pid)
+	}
+
 	out, err := xml.MarshalIndent(&doc, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("marshal cobertura xml: %w", err)
@@ -294,14 +306,152 @@ func mergeCompilerGeneratedClassesIntoParents(data []byte) ([]byte, error) {
 
 // cleanCoberturaCompilerGeneratedClasses 读取 coberturaFile，合并其中的编译器
 // 生成类后原地写回，供 reportgenerator 生成正确反映覆盖率的 HTML 报表。
-func cleanCoberturaCompilerGeneratedClasses(coberturaFile string) error {
+// pid 是目标进程的 pid，仅在 GlobalOptions.CoverageOpts.SourceFromPDB 打开时才会用到，
+// 用于定位目标进程的工作目录以搜索 .pdb 文件。
+func cleanCoberturaCompilerGeneratedClasses(coberturaFile string, pid int) error {
 	data, err := os.ReadFile(coberturaFile)
 	if err != nil {
 		return fmt.Errorf("read cobertura xml: %w", err)
 	}
-	cleaned, err := mergeCompilerGeneratedClassesIntoParents(data)
+	cleaned, err := mergeCompilerGeneratedClassesIntoParents(data, pid)
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(coberturaFile, cleaned, 0o644)
+}
+
+// fixMissingSourceFilenamesFromPDB 为 packages 中 filename 在本地磁盘上不存在的 class，
+// 尝试从 pid 对应目标进程工作目录（/proc/<pid>/cwd）下的 .pdb 文件里恢复源码：
+//  1. 在目标进程的工作目录下递归搜索所有 .pdb 文件；
+//  2. 用 internal/pdb 把每个 pdb 内嵌的 .cs 源文件 dump 到 /tmp 下的一个临时目录，
+//     建立「文件名(不含路径) -> 完整路径集合」的索引（用集合是因为不同 pdb 可能
+//     包含同名但内容不同的源文件，需要避免互相覆盖或被当成同一个文件）；
+//  3. 对每个 filename 缺失的 class，按文件名在索引里查找：只有一个候选就直接采用；
+//     有多个候选时，与原始 filename 从右向左逐段比较路径，取匹配段数最长的一个。
+//
+// 找不到目标进程工作目录、目录下没有 pdb、或 pdb 里没有匹配的源文件时，保持 filename 不变。
+func fixMissingSourceFilenamesFromPDB(packages []*coberturaPackage, pid int) {
+	missing := collectMissingFilenames(packages)
+	if len(missing) == 0 {
+		return
+	}
+	cwd := readProcessCwd(pid)
+	if cwd == "" {
+		return
+	}
+	pdbFiles, err := findPDBFiles(cwd)
+	if err != nil || len(pdbFiles) == 0 {
+		return
+	}
+	index := buildCSFileIndexFromPDBs(pdbFiles)
+	if len(index) == 0 {
+		return
+	}
+	for _, pkg := range packages {
+		for _, cls := range pkg.Classes.Class {
+			if _, ok := missing[cls.Filename]; !ok {
+				continue
+			}
+			candidates := index[filepath.Base(cls.Filename)]
+			if len(candidates) == 0 {
+				continue
+			}
+			cls.Filename = pickBestFilenameMatch(cls.Filename, candidates)
+		}
+	}
+}
+
+// collectMissingFilenames 返回 packages 中所有本地磁盘上不存在对应文件的 filename 集合。
+func collectMissingFilenames(packages []*coberturaPackage) map[string]struct{} {
+	missing := make(map[string]struct{})
+	for _, pkg := range packages {
+		for _, cls := range pkg.Classes.Class {
+			if cls.Filename == "" {
+				continue
+			}
+			if _, ok := missing[cls.Filename]; ok {
+				continue
+			}
+			if _, err := os.Stat(cls.Filename); err != nil {
+				missing[cls.Filename] = struct{}{}
+			}
+		}
+	}
+	return missing
+}
+
+// findPDBFiles 递归搜索 dir 下所有 .pdb 文件，忽略单个条目的错误（如权限问题）以便
+// 继续搜索其余部分。
+func findPDBFiles(dir string) ([]string, error) {
+	var result []string
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() && strings.EqualFold(filepath.Ext(path), ".pdb") {
+			result = append(result, path)
+		}
+		return nil
+	})
+	return result, err
+}
+
+// buildCSFileIndexFromPDBs 把每个 pdb 文件内嵌的 .cs 源码 dump 到 /tmp 下的独立临时目录，
+// 并建立「文件名(不含路径) -> 完整路径集合」的索引。单个 pdb 提取失败不影响其余 pdb 的处理。
+func buildCSFileIndexFromPDBs(pdbFiles []string) map[string]map[string]struct{} {
+	index := make(map[string]map[string]struct{})
+	for _, pdbFile := range pdbFiles {
+		targetDir, err := os.MkdirTemp(os.TempDir(), "pdb-source-")
+		if err != nil {
+			continue
+		}
+		if _, err := pdb.Extract(pdbFile, targetDir, true); err != nil {
+			continue
+		}
+		_ = filepath.WalkDir(targetDir, func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".cs") {
+				return nil
+			}
+			base := filepath.Base(path)
+			if index[base] == nil {
+				index[base] = make(map[string]struct{})
+			}
+			index[base][path] = struct{}{}
+			return nil
+		})
+	}
+	return index
+}
+
+// pickBestFilenameMatch 在 candidates 中选出与 original 路径从右向左匹配路径段数最长
+// 的一个；匹配段数相同则取字典序最小的路径，保证结果确定性。
+func pickBestFilenameMatch(original string, candidates map[string]struct{}) string {
+	paths := make([]string, 0, len(candidates))
+	for p := range candidates {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	best := paths[0]
+	bestLen := commonPathSuffixLen(original, best)
+	for _, p := range paths[1:] {
+		if l := commonPathSuffixLen(original, p); l > bestLen {
+			bestLen = l
+			best = p
+		}
+	}
+	return best
+}
+
+// commonPathSuffixLen 计算 a、b 两个路径从右向左连续相同的路径段数。
+func commonPathSuffixLen(a, b string) int {
+	as := strings.Split(filepath.ToSlash(a), "/")
+	bs := strings.Split(filepath.ToSlash(b), "/")
+	n := 0
+	for i, j := len(as)-1, len(bs)-1; i >= 0 && j >= 0; i, j = i-1, j-1 {
+		if as[i] != bs[j] {
+			break
+		}
+		n++
+	}
+	return n
 }

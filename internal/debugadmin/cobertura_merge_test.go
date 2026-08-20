@@ -43,7 +43,7 @@ const sampleCoberturaXML = `<?xml version="1.0" encoding="utf-8"?>
 </coverage>`
 
 func TestMergeCompilerGeneratedClassesIntoParents(t *testing.T) {
-	cleaned, err := mergeCompilerGeneratedClassesIntoParents([]byte(sampleCoberturaXML))
+	cleaned, err := mergeCompilerGeneratedClassesIntoParents([]byte(sampleCoberturaXML), 0)
 	if err != nil {
 		t.Fatalf("mergeCompilerGeneratedClassesIntoParents failed: %v", err)
 	}

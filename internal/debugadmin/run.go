@@ -148,6 +148,7 @@ func loadOptions(args []string) (*Options, error) {
 	withCoverage := false
 	coverageXMLSettingsFile := ""
 	coverageSourceDirs := ""
+	coverageSourceFromPDB := false
 	var excludeRegexpPatternsForCoverage stringSliceFlag
 
 	flagSet := flag.NewFlagSet("DebugAdmin", flag.ContinueOnError)
@@ -163,6 +164,7 @@ func loadOptions(args []string) (*Options, error) {
 	flagSet.Var(&excludeRegexpPatternsForCoverage, "coverage.exclude.re", "regexp pattern of files to exclude from code coverage; can be specified multiple times")
 	flagSet.StringVar(&coverageXMLSettingsFile, "coverage.xml.settings", coverageXMLSettingsFile, "path to a dotnet-coverage settings xml file, passed via --settings when collecting coverage")
 	flagSet.StringVar(&coverageSourceDirs, "coverage.source.dirs", coverageSourceDirs, "semicolon-separated list of source directories, passed via -sourcedirs to reportgenerator; each directory must exist")
+	flagSet.BoolVar(&coverageSourceFromPDB, "coverage.source.from.pdb", coverageSourceFromPDB, "when a cobertura filename doesn't exist locally, search the target process's working directory for .pdb files and recover the source from their embedded .cs files")
 	if err := flagSet.Parse(args); err != nil {
 		return nil, err
 	}
@@ -205,6 +207,7 @@ func loadOptions(args []string) (*Options, error) {
 			CoverageXMLSettingsFile:   coverageXMLSettingsFile,
 			ExcludeRegexpsForCoverage: excludeRegexpsForCoverage,
 			SourceDirs:                coverageSourceDirs,
+			SourceFromPDB:             coverageSourceFromPDB,
 		},
 	}, nil
 }

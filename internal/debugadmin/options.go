@@ -10,6 +10,7 @@ type CoverageOptions struct {
 	// ExcludeRegexpsForCoverage 用于指定覆盖率排除的正则表达式列表，支持多个。
 	ExcludeRegexpsForCoverage []regexp.Regexp
 	SourceDirs                string // 用分号分隔的多个目录
+	SourceFromPDB             bool   // 是否允许从 gdb 文件得到源码。对应选项 -coverage.source.from.pdb
 }
 
 type Options struct {
