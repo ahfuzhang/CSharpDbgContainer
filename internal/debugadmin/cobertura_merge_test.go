@@ -11,7 +11,7 @@ const sampleCoberturaXML = `<?xml version="1.0" encoding="utf-8"?>
   <packages>
     <package name="Demo" line-rate="0.5" branch-rate="1" complexity="2">
       <classes>
-        <class name="Demo.BetFlow&lt;TRequest, TResponse&gt;" filename="/src/BetFlow.cs" line-rate="0" branch-rate="1" complexity="1">
+        <class name="Demo.Flow&lt;TRequest, TResponse&gt;" filename="/src/Flow.cs" line-rate="0" branch-rate="1" complexity="1">
           <methods>
             <method name="SetRequest" signature="()" line-rate="0" branch-rate="1" complexity="1">
               <lines>
@@ -23,7 +23,7 @@ const sampleCoberturaXML = `<?xml version="1.0" encoding="utf-8"?>
             <line number="10" hits="0" branch="False" />
           </lines>
         </class>
-        <class name="Demo.BetFlow.&lt;TriggerAsync&gt;d__5&lt;TRequest, TResponse&gt;" filename="/src/BetFlow.cs" line-rate="1" branch-rate="1" complexity="1">
+        <class name="Demo.Flow.&lt;TriggerAsync&gt;d__5&lt;TRequest, TResponse&gt;" filename="/src/Flow.cs" line-rate="1" branch-rate="1" complexity="1">
           <methods>
             <method name="MoveNext" signature="()" line-rate="1" branch-rate="1" complexity="1">
               <lines>
@@ -62,7 +62,7 @@ func TestMergeCompilerGeneratedClassesIntoParents(t *testing.T) {
 	}
 
 	parent := classes[0]
-	if parent.Name != "Demo.BetFlow<TRequest, TResponse>" {
+	if parent.Name != "Demo.Flow<TRequest, TResponse>" {
 		t.Fatalf("unexpected parent class name: %q", parent.Name)
 	}
 
@@ -103,12 +103,12 @@ func TestParseGeneratedClassName(t *testing.T) {
 		wantMethod string
 		wantOK     bool
 	}{
-		{"Demo.BetFlow.<TriggerAsync>d__5<TRequest, TResponse>", "Demo.BetFlow<TRequest, TResponse>", "TriggerAsync", true},
+		{"Demo.Flow.<TriggerAsync>d__5<TRequest, TResponse>", "Demo.Flow<TRequest, TResponse>", "TriggerAsync", true},
 		{"Demo.Foo.<>c", "Demo.Foo", "", true},
 		{"Demo.Foo.<>c__DisplayClass1_0", "Demo.Foo", "", true},
 		{"Demo.Foo.<>c__DisplayClass1_0<T>", "Demo.Foo<T>", "", true},
-		{"Demo.BetFlow<TRequest, TResponse>", "", "", false},
-		{"Demo.SampleBetFlow", "", "", false},
+		{"Demo.Flow<TRequest, TResponse>", "", "", false},
+		{"Demo.Candy", "", "", false},
 	}
 	for _, tt := range tests {
 		parent, method, ok := parseGeneratedClassName(tt.name)

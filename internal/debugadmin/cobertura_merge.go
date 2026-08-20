@@ -9,8 +9,7 @@ package debugadmin
 // 这里的做法是在 dotnet-coverage 产出 cobertura xml 之后、喂给 reportgenerator
 // 之前，把这些编译器生成类的行数据合并进它们的父类，并把状态机的行合成为一个
 // 以原始异步方法命名的 <method>，从而让 reportgenerator 按父类正常渲染。
-// 诊断细节见 internal-repo 仓库
-// AI_test/prompt/2026-08-17/overview_20260817_1932.md。
+// 诊断细节见内部仓库 AI_test/prompt/2026-08-17/overview_20260817_1932.md。
 
 import (
 	"encoding/xml"
