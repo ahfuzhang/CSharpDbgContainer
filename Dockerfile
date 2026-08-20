@@ -31,9 +31,10 @@ RUN go mod download
 COPY main.go ./
 COPY internal ./internal
 COPY logging ./logging
+COPY cmd ./cmd
 COPY --from=speedscope_fetcher /out/speedscope ./build/speedscope
 
-RUN GOOS=linux GOARCH=amd64 go build -o /out/DebugAdmin ./main.go
+RUN GOOS=linux GOARCH=amd64 go build -o /out/DebugAdmin ./main.go && go build -o /out/pdb_util ./cmd/pdb_util/main.go
 
 # 阶段：下载并整理 ossutil。
 # 这里产出最终镜像里使用的 ossutil 二进制。
@@ -236,6 +237,7 @@ COPY --chown=abc:abc ./CodeServer/settings.json /config/.local/share/code-server
 # DebugAdmin 是最常变化的内容，必须保持为最后一个文件系统层。
 # 这样仅修改 Go 代码时，前面的 .NET SDK、调试器和 code-server 扩展层仍可复用。
 COPY --from=debugadmin_builder /out/DebugAdmin /usr/bin/DebugAdmin
+COPY --from=debugadmin_builder /out/pdb_util /usr/bin/pdb_util
 COPY --from=pdb_to_source_builder /out/pdb_to_source /usr/bin/pdb_to_source
 
 USER abc

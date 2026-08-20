@@ -102,6 +102,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 type indexPageData struct {
 	TargetLabel       string
 	PID               int
+	CWD               string
 	ShowCurrentGDBLog bool
 	WithCoverage      bool
 	Processes         []ProcessInfo
@@ -161,9 +162,11 @@ type runHistoryRow struct {
 func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Add("Content-Type", "text/html")
 	target := h.target.Load()
+	pid := h.resolveTargetPID()
 	_ = indexHTMLTemplate.Execute(w, indexPageData{
 		TargetLabel:       h.targetLabel,
-		PID:               target.PID(),
+		PID:               pid,
+		CWD:               html.EscapeString(readProcessCwd(pid)),
 		ShowCurrentGDBLog: target != nil && target.GDBLogPath() != "",
 		WithCoverage:      GlobalOptions.WithCoverage,
 		Processes:         listContainerProcesses(GlobalOptions.StartupParams),

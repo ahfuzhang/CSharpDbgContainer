@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"text/template"
 	"time"
@@ -145,6 +146,9 @@ func loadOptions(args []string) (*Options, error) {
 	autoRestart := false
 	withGDB := false
 	withCoverage := false
+	coverageXMLSettingsFile := ""
+	coverageSourceDirs := ""
+	var excludeRegexpPatternsForCoverage stringSliceFlag
 
 	flagSet := flag.NewFlagSet("DebugAdmin", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
@@ -156,11 +160,28 @@ func loadOptions(args []string) (*Options, error) {
 	flagSet.BoolVar(&autoRestart, "auto.restart", autoRestart, "automatically restart the target process when it crashes")
 	flagSet.BoolVar(&withGDB, "with.gdb", withGDB, "start the target process with gdb")
 	flagSet.BoolVar(&withCoverage, "with.coverage", withCoverage, "start the target process with dotnet-coverage to collect code coverage")
+	flagSet.Var(&excludeRegexpPatternsForCoverage, "coverage.exclude.re", "regexp pattern of files to exclude from code coverage; can be specified multiple times")
+	flagSet.StringVar(&coverageXMLSettingsFile, "coverage.xml.settings", coverageXMLSettingsFile, "path to a dotnet-coverage settings xml file, passed via --settings when collecting coverage")
+	flagSet.StringVar(&coverageSourceDirs, "coverage.source.dirs", coverageSourceDirs, "semicolon-separated list of source directories, passed via -sourcedirs to reportgenerator; each directory must exist")
 	if err := flagSet.Parse(args); err != nil {
 		return nil, err
 	}
 	if withGDB && withCoverage {
 		return nil, errors.New("-with.gdb and -with.coverage cannot be used together")
+	}
+	excludeRegexpsForCoverage, err := compileExcludeRegexpsForCoverage(excludeRegexpPatternsForCoverage)
+	if err != nil {
+		return nil, err
+	}
+	coverageXMLSettingsFile = strings.TrimSpace(coverageXMLSettingsFile)
+	if coverageXMLSettingsFile != "" {
+		if _, err := os.Stat(coverageXMLSettingsFile); err != nil {
+			return nil, fmt.Errorf("-coverage.xml.settings file %q not accessible: %w", coverageXMLSettingsFile, err)
+		}
+	}
+	coverageSourceDirs, err = validateCoverageSourceDirs(coverageSourceDirs)
+	if err != nil {
+		return nil, err
 	}
 	if port < 1 || port > 65535 {
 		return nil, fmt.Errorf("admin.port should be between 1 and 65535, got %d", port)
@@ -179,8 +200,75 @@ func loadOptions(args []string) (*Options, error) {
 		AutoRestart:       autoRestart,
 		WithGDB:           withGDB,
 		WithCoverage:      withCoverage,
-		CoverageName:      uuid.NewString(),
+		CoverageOpts: CoverageOptions{
+			CoverageName:              uuid.NewString(),
+			CoverageXMLSettingsFile:   coverageXMLSettingsFile,
+			ExcludeRegexpsForCoverage: excludeRegexpsForCoverage,
+			SourceDirs:                coverageSourceDirs,
+		},
 	}, nil
+}
+
+// stringSliceFlag 支持在命令行中重复指定同一个参数，多次出现的值会依次追加到切片中。
+type stringSliceFlag []string
+
+func (s *stringSliceFlag) String() string {
+	return strings.Join(*s, ",")
+}
+
+func (s *stringSliceFlag) Set(value string) error {
+	*s = append(*s, value)
+	return nil
+}
+
+// compileExcludeRegexpsForCoverage 将 -coverage.exclude.re 收集到的正则表达式文本编译为 Regexp 对象。
+// 出现重复的表达式文本，或表达式编译失败，都会返回 error，调用方应据此终止进程。
+func compileExcludeRegexpsForCoverage(patterns []string) ([]regexp.Regexp, error) {
+	if len(patterns) > 1 {
+		seen := make(map[string]struct{}, len(patterns))
+		for _, pattern := range patterns {
+			if _, ok := seen[pattern]; ok {
+				return nil, fmt.Errorf("duplicate -coverage.exclude.re pattern: %q", pattern)
+			}
+			seen[pattern] = struct{}{}
+		}
+	}
+	result := make([]regexp.Regexp, 0, len(patterns))
+	for _, pattern := range patterns {
+		re, err := regexp.Compile(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("invalid -coverage.exclude.re pattern %q: %w", pattern, err)
+		}
+		result = append(result, *re)
+	}
+	return result, nil
+}
+
+// validateCoverageSourceDirs 解析 -coverage.source.dirs 参数：按分号切分，去除空白后
+// 逐个检查目录是否存在，任意一个不存在都返回 error，调用方应据此终止进程。
+// 返回值是清理（去除首尾空白、过滤空项）后重新以分号拼接的目录列表。
+func validateCoverageSourceDirs(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	parts := strings.Split(raw, ";")
+	dirs := make([]string, 0, len(parts))
+	for _, part := range parts {
+		dir := strings.TrimSpace(part)
+		if dir == "" {
+			continue
+		}
+		info, err := os.Stat(dir)
+		if err != nil {
+			return "", fmt.Errorf("-coverage.source.dirs directory %q not accessible: %w", dir, err)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("-coverage.source.dirs %q is not a directory", dir)
+		}
+		dirs = append(dirs, dir)
+	}
+	return strings.Join(dirs, ";"), nil
 }
 
 func enableUnlimitedCoreDump() error {

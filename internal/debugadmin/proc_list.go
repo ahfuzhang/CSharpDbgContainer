@@ -225,6 +225,15 @@ func readProcessCmdline(pid int) []string {
 	return strings.Split(strings.TrimRight(string(data), "\x00"), "\x00")
 }
 
+// readProcessCwd 读取 /proc/[pid]/cwd 符号链接，返回目标进程的当前工作目录。
+func readProcessCwd(pid int) string {
+	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", pid))
+	if err != nil {
+		return ""
+	}
+	return cwd
+}
+
 // formatUptime renders a duration as "Xh Ym Zs", e.g. "2h 15m 30s".
 func formatUptime(d time.Duration) string {
 	if d < 0 {

@@ -99,6 +99,12 @@ visit: `http://${your-server}:8089/`
   - `with.coverage`: 已代码覆盖率采集的模式启动。`-with.gdb` 与 `with.coverage` 这两个选项时互斥的。
   - `--`: 分隔符。这个分隔符之后，就是 dotnet 服务器程序的命令行参数
     - 如果 `--` 之后的第一个路径以 xx.dll 结尾，则会自动加上 `dotnet xx.dll -params=value`
+  - 代码覆盖率相关:
+    - `-coverage.exclude.re="${regexp}"`: 在 *.cobertura.xml 文件中排除某些 package name
+    - `-coverage.xml.settings="xml file"`: 在 `dotnet-coverage collect` 的启动参数中增加 `--settings ${xml_file}` 的选项。
+      - xml 的格式请参考: [example.code.coverage.settings.xml](./doc/example.code.coverage.settings.xml)
+      - 用于指定需要和排除的 dll
+    - `-coverage.source.dirs="/dir1/;/dir2/"`: 生成 html 报表时，指定多个源码目录
 
 # [WIP]
 

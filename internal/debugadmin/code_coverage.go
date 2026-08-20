@@ -117,19 +117,30 @@ func (h *AdminHandler) handleCodeCoverage(w http.ResponseWriter, r *http.Request
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
 	defer cancel()
 
-	timestamp := time.Now().Format("20060102150405")
-	coverageFile := filepath.Join(os.TempDir(), timestamp+".coverage")
-	coberturaFile := filepath.Join(os.TempDir(), timestamp+".cobertura.xml")
 	reportID := uuid.NewString()
+	//timestamp := time.Now().Format("20060102150405")
+	coverageFile := filepath.Join(os.TempDir(), reportID+".coverage")
+	coberturaFile := filepath.Join(os.TempDir(), reportID+".cobertura.xml")
 	htmlDir := filepath.Join(os.TempDir(), reportID)
+
+	snapshotArgs := []string{"snapshot", "--output", coverageFile}
+	// if settingsFile := GlobalOptions.CoverageOpts.CoverageXMLSettingsFile; settingsFile != "" {
+	// 	snapshotArgs = append(snapshotArgs, "--settings", settingsFile)
+	// }
+	snapshotArgs = append(snapshotArgs, GlobalOptions.CoverageOpts.CoverageName)
+
+	reportGeneratorArgs := []string{"-reports:" + coberturaFile, "-targetdir:" + htmlDir, "-reporttypes:Html"}
+	if sourceDirs := GlobalOptions.CoverageOpts.SourceDirs; sourceDirs != "" {
+		reportGeneratorArgs = append(reportGeneratorArgs, "-sourcedirs:"+sourceDirs)
+	}
 
 	steps := []struct {
 		label string
 		cmd   *exec.Cmd
 	}{
-		{"dotnet-coverage snapshot", exec.CommandContext(ctx, "dotnet-coverage", "snapshot", "--output", coverageFile, GlobalOptions.CoverageName)},
+		{"dotnet-coverage snapshot", exec.CommandContext(ctx, "dotnet-coverage", snapshotArgs...)},
 		{"dotnet-coverage merge", exec.CommandContext(ctx, "dotnet-coverage", "merge", coverageFile, "--output", coberturaFile, "--output-format", "cobertura")},
-		{"reportgenerator", exec.CommandContext(ctx, "reportgenerator", "-reports:"+coberturaFile, "-targetdir:"+htmlDir, "-reporttypes:Html")},
+		{"reportgenerator", exec.CommandContext(ctx, "reportgenerator", reportGeneratorArgs...)},
 	}
 	for _, step := range steps {
 		output, err := step.cmd.CombinedOutput()
@@ -165,7 +176,7 @@ func (h *AdminHandler) handleResetCoverageData(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	cmd := exec.Command("dotnet-coverage", "snapshot", GlobalOptions.CoverageName, "--output", "/dev/null", "--reset", "true")
+	cmd := exec.Command("dotnet-coverage", "snapshot", GlobalOptions.CoverageOpts.CoverageName, "--output", "/dev/null", "--reset", "true")
 	if err := cmd.Start(); err != nil {
 		http.Error(w, fmt.Sprintf("start dotnet-coverage snapshot failed: %v", err), http.StatusInternalServerError)
 		return

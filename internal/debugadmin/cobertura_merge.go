@@ -214,15 +214,40 @@ func recomputeClassLineRate(cls *coberturaClass) {
 	cls.LineRate = strconv.FormatFloat(float64(covered)/float64(len(m)), 'g', -1, 64)
 }
 
+// isCoveragePackageExcluded 判断 package 的 name 是否命中 GlobalOptions.CoverageOpts.ExcludeRegexpsForCoverage
+// 中的任意一个正则表达式，命中则说明该 package 需要从覆盖率报表中排除。
+func isCoveragePackageExcluded(name string) bool {
+	if GlobalOptions == nil {
+		return false
+	}
+	for i := range GlobalOptions.CoverageOpts.ExcludeRegexpsForCoverage {
+		if GlobalOptions.CoverageOpts.ExcludeRegexpsForCoverage[i].MatchString(name) {
+			return true
+		}
+	}
+	return false
+}
+
 // mergeCompilerGeneratedClassesIntoParents 解析 cobertura xml，把编译器生成的类
 // （async 状态机、lambda 缓存、闭包）合并进各自的父类，并从输出中移除这些生成类，
 // 使每个源文件只保留“真实”的类，避免 reportgenerator 因泛型父类与生成类
 // DisplayName 相同而产生的渲染竞态。
+// 处理前会先按 GlobalOptions.CoverageOpts.ExcludeRegexpsForCoverage 过滤掉匹配的 package，
+// 使其不出现在最终的 html report 中。
 func mergeCompilerGeneratedClassesIntoParents(data []byte) ([]byte, error) {
 	var doc coberturaDoc
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse cobertura xml: %w", err)
 	}
+
+	remainingPackages := doc.Packages.Package[:0]
+	for _, pkg := range doc.Packages.Package {
+		if isCoveragePackageExcluded(pkg.Name) {
+			continue
+		}
+		remainingPackages = append(remainingPackages, pkg)
+	}
+	doc.Packages.Package = remainingPackages
 
 	mainClasses := make(map[coberturaClassKey]*coberturaClass)
 	for _, pkg := range doc.Packages.Package {

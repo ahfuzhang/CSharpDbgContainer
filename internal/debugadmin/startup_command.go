@@ -24,13 +24,16 @@ func BuildStartupCommand() (*exec.Cmd, error) {
 // buildCoverageArgs 构造 dotnet-coverage 的命令行参数：
 // collect --session-id ${name} --output /tmp/${name}.coverage ${program} ${args...}
 func buildCoverageArgs(program string, args []string) []string {
-	name := GlobalOptions.CoverageName
+	name := GlobalOptions.CoverageOpts.CoverageName
 	coverageArgs := []string{
 		"collect",
 		"--session-id", name,
 		"--output", fmt.Sprintf("/tmp/%s.coverage", name),
-		program,
 	}
+	if GlobalOptions.CoverageOpts.CoverageXMLSettingsFile != "" {
+		coverageArgs = append(coverageArgs, "--settings", GlobalOptions.CoverageOpts.CoverageXMLSettingsFile)
+	}
+	coverageArgs = append(coverageArgs, program)
 	return append(coverageArgs, args...)
 }
 

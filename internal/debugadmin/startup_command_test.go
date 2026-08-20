@@ -34,7 +34,7 @@ func TestBuildStartupCommand(t *testing.T) {
 		},
 		{
 			name: "dll with coverage",
-			opts: Options{WithCoverage: true, CoverageName: "cov-123", StartupParams: []string{"app.dll", "-param1=value1"}},
+			opts: Options{WithCoverage: true, CoverageOpts: CoverageOptions{CoverageName: "cov-123"}, StartupParams: []string{"app.dll", "-param1=value1"}},
 			want: []string{"dotnet-coverage", "collect", "--session-id", "cov-123", "--output", "/tmp/cov-123.coverage", "dotnet", "app.dll", "-param1=value1"},
 		},
 	}

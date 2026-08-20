@@ -26,7 +26,10 @@ docker-build:
 download: ./build/speedscope/.unpacked
 	@echo "ok"
 
-build: download
+pdb_util:
+	go build -o ./build/pdb_util ./cmd/pdb_util/main.go
+
+build: download pdb_util
 	mkdir -p build
 	go build -o ./build/debugadmin .
 

@@ -95,7 +95,7 @@
 <body>
 
 <h1>Dotnet Debug Container All-In-One
-<span class="sub">target={{.TargetLabel}} pid={{.PID}}</span>
+<span class="sub">target={{.TargetLabel}} pid={{.PID}} cwd={{if .CWD}}{{.CWD}}{{else}}-{{end}}</span>
 </h1>
 
 <section class="section-links">
