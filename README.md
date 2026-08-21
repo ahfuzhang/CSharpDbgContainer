@@ -155,3 +155,9 @@ visit: `http://${your-server}:8089/`
     - `/usr/bin/pdb_to_source`: csharp 实现的版本
 * CodeServer 功能❌ (暂未开发)
   - 如果指定源码目录，可以通过 code server 浏览和编辑源码  
+
+# 文章链接
+
+* [CSharp 后端服务器如何做到：一边发请求一边看代码覆盖率](https://www.cnblogs.com/ahfuzhang/p/20474477)
+* [Debug Container All-In-One: 调试 C# 后端崩溃的利器](https://www.cnblogs.com/ahfuzhang/p/21926708)
+* [【CSharp在线代码覆盖率报表】请求一条接口后，如何精确看到覆盖率哪一行](https://www.cnblogs.com/ahfuzhang/p/22611060)
