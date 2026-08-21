@@ -19,7 +19,7 @@ import (
 )
 
 var reportUUIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-var coberturaFileNamePattern = regexp.MustCompile(`^\d{14}\.cobertura\.xml$`)
+var coberturaFileNamePattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\.cobertura\.xml$`)
 
 const maxCoverageHistory = 20
 

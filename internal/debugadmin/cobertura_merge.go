@@ -12,6 +12,8 @@ package debugadmin
 // 诊断细节见内部仓库 AI_test/prompt/2026-08-17/overview_20260817_1932.md。
 
 import (
+	"crypto/sha1"
+	"encoding/hex"
 	"encoding/xml"
 	"fmt"
 	"io/fs"
@@ -246,7 +248,7 @@ func mergeCompilerGeneratedClassesIntoParents(data []byte, pid int) ([]byte, err
 	if err := xml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse cobertura xml: %w", err)
 	}
-
+	// 排除不需要的 class
 	remainingPackages := doc.Packages.Package[:0]
 	for _, pkg := range doc.Packages.Package {
 		if isCoveragePackageExcluded(pkg.Name) {
@@ -255,7 +257,7 @@ func mergeCompilerGeneratedClassesIntoParents(data []byte, pid int) ([]byte, err
 		remainingPackages = append(remainingPackages, pkg)
 	}
 	doc.Packages.Package = remainingPackages
-
+	// 建立索引
 	mainClasses := make(map[coberturaClassKey]*coberturaClass)
 	for _, pkg := range doc.Packages.Package {
 		for _, cls := range pkg.Classes.Class {
@@ -292,6 +294,7 @@ func mergeCompilerGeneratedClassesIntoParents(data []byte, pid int) ([]byte, err
 		recomputeClassLineRate(cls)
 	}
 
+	// 根据 pdb 文件，修复 xml 中的源码文件的路径
 	if GlobalOptions != nil && GlobalOptions.CoverageOpts.SourceFromPDB {
 		fixMissingSourceFilenamesFromPDB(doc.Packages.Package, pid)
 	}
@@ -322,9 +325,12 @@ func cleanCoberturaCompilerGeneratedClasses(coberturaFile string, pid int) error
 // fixMissingSourceFilenamesFromPDB 为 packages 中 filename 在本地磁盘上不存在的 class，
 // 尝试从 pid 对应目标进程工作目录（/proc/<pid>/cwd）下的 .pdb 文件里恢复源码：
 //  1. 在目标进程的工作目录下递归搜索所有 .pdb 文件；
-//  2. 用 internal/pdb 把每个 pdb 内嵌的 .cs 源文件 dump 到 /tmp 下的一个临时目录，
-//     建立「文件名(不含路径) -> 完整路径集合」的索引（用集合是因为不同 pdb 可能
-//     包含同名但内容不同的源文件，需要避免互相覆盖或被当成同一个文件）；
+//  2. 用 internal/pdb 把每个 pdb 内嵌的 .cs 源文件 dump 到按 pdb 路径确定性命名的缓存
+//     目录（见 pdbSourceCacheDir），建立「文件名(不含路径) -> 完整路径集合」的索引
+//     （用集合是因为不同 pdb 可能包含同名但内容不同的源文件，需要避免互相覆盖或被
+//     当成同一个文件）。容器生存周期内源码不会变化，同一个 pdb 只在缓存目录里没有
+//     提取标记时才会真正解析一次，之后的调用（无论是否同一个 session）都直接复用
+//     已经 dump 出来的源码文件；
 //  3. 对每个 filename 缺失的 class，按文件名在索引里查找：只有一个候选就直接采用；
 //     有多个候选时，与原始 filename 从右向左逐段比较路径，取匹配段数最长的一个。
 //
@@ -351,7 +357,7 @@ func fixMissingSourceFilenamesFromPDB(packages []*coberturaPackage, pid int) {
 			if _, ok := missing[cls.Filename]; !ok {
 				continue
 			}
-			candidates := index[filepath.Base(cls.Filename)]
+			candidates := index[baseNameAnySeparator(cls.Filename)]
 			if len(candidates) == 0 {
 				continue
 			}
@@ -395,17 +401,43 @@ func findPDBFiles(dir string) ([]string, error) {
 	return result, err
 }
 
-// buildCSFileIndexFromPDBs 把每个 pdb 文件内嵌的 .cs 源码 dump 到 /tmp 下的独立临时目录，
-// 并建立「文件名(不含路径) -> 完整路径集合」的索引。单个 pdb 提取失败不影响其余 pdb 的处理。
+// pdbSourceCacheRoot 是 pdb 源码提取缓存的根目录。容器生存周期内源码不会变化，
+// 所以不需要像临时文件那样按 session 区分，缓存目录以 pdb 文件路径确定性命名，
+// 跨多次调用（乃至跨多个 session）复用同一份已提取的源码。
+var pdbSourceCacheRoot = filepath.Join(os.TempDir(), "csharpdbg-pdb-source-cache")
+
+// pdbSourceExtractedMarker 标记某个 pdb 缓存目录已经完成过一次提取，用于区分
+// “提取过但 pdb 里没有可用源码”与“还没提取过”，避免每次都重新解析 pdb 文件。
+const pdbSourceExtractedMarker = ".extracted"
+
+// pdbSourceCacheDir 返回 pdbFile 对应的确定性缓存目录：同一个 pdb 路径始终映射到
+// 同一个目录，使跨调用/跨 session 的多次处理可以直接复用之前提取好的源码。
+func pdbSourceCacheDir(pdbFile string) string {
+	abs, err := filepath.Abs(pdbFile)
+	if err != nil {
+		abs = pdbFile
+	}
+	sum := sha1.Sum([]byte(abs)) //nolint:gosec // 仅用于生成确定性缓存目录名，无安全需求
+	return filepath.Join(pdbSourceCacheRoot, hex.EncodeToString(sum[:]))
+}
+
+// buildCSFileIndexFromPDBs 为每个 pdb 文件准备好其确定性缓存目录：如果目录下已经有
+// 提取标记，说明之前的调用（不论是否同一个 session）已经把源码 dump 出来了，直接
+// 复用即可；否则才调用 internal/pdb 把内嵌的 .cs 源码提取到该目录。最终建立
+// 「文件名(不含路径) -> 完整路径集合」的索引。单个 pdb 提取失败不影响其余 pdb 的处理。
 func buildCSFileIndexFromPDBs(pdbFiles []string) map[string]map[string]struct{} {
 	index := make(map[string]map[string]struct{})
 	for _, pdbFile := range pdbFiles {
-		targetDir, err := os.MkdirTemp(os.TempDir(), "pdb-source-")
-		if err != nil {
-			continue
-		}
-		if _, err := pdb.Extract(pdbFile, targetDir, true); err != nil {
-			continue
+		targetDir := pdbSourceCacheDir(pdbFile)
+		markerPath := filepath.Join(targetDir, pdbSourceExtractedMarker)
+		if _, err := os.Stat(markerPath); err != nil {
+			if err := os.MkdirAll(targetDir, 0o755); err != nil {
+				continue
+			}
+			if _, err := pdb.Extract(pdbFile, targetDir, true); err != nil {
+				continue
+			}
+			_ = os.WriteFile(markerPath, nil, 0o644)
 		}
 		_ = filepath.WalkDir(targetDir, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.EqualFold(filepath.Ext(path), ".cs") {
@@ -441,10 +473,26 @@ func pickBestFilenameMatch(original string, candidates map[string]struct{}) stri
 	return best
 }
 
+// toSlashPath 把路径中的 '\' 统一替换成 '/'。pdb 在 windows 上编译时，内嵌的源码路径
+// 是 c:\xxx\yyy.cs 这种形式，而本工具运行在 linux 上：filepath.ToSlash 在非 windows
+// 平台上是空操作，不会转换 '\'，所以这里手动处理以兼容 windows 风格路径。
+func toSlashPath(p string) string {
+	return strings.ReplaceAll(p, `\`, "/")
+}
+
+// baseNameAnySeparator 返回路径最后一段文件名，同时兼容 '/' 和 '\' 作为分隔符。
+func baseNameAnySeparator(p string) string {
+	p = toSlashPath(p)
+	if idx := strings.LastIndexByte(p, '/'); idx >= 0 {
+		return p[idx+1:]
+	}
+	return p
+}
+
 // commonPathSuffixLen 计算 a、b 两个路径从右向左连续相同的路径段数。
 func commonPathSuffixLen(a, b string) int {
-	as := strings.Split(filepath.ToSlash(a), "/")
-	bs := strings.Split(filepath.ToSlash(b), "/")
+	as := strings.Split(toSlashPath(a), "/")
+	bs := strings.Split(toSlashPath(b), "/")
 	n := 0
 	for i, j := len(as)-1, len(bs)-1; i >= 0 && j >= 0; i, j = i-1, j-1 {
 		if as[i] != bs[j] {
