@@ -105,36 +105,53 @@ visit: `http://${your-server}:8089/`
       - xml 的格式请参考: [example.code.coverage.settings.xml](./doc/example.code.coverage.settings.xml)
       - 用于指定需要和排除的 dll
     - `-coverage.source.dirs="/dir1/;/dir2/"`: 生成 html 报表时，指定多个源码目录
+    - `-coverage.source.from.pdb`: 存在这个选项时，将自动从 pdb 文件中提取源码，并生成 html report
 
-# [WIP]
+# What I done
 
-制作一个 All-in-one 的镜像，便于在线调试 DotNet 程序。
+* 目标：制作一个 All-in-one 的镜像，便于在线调试 DotNet 程序。
 
 支持如下功能：
-* 预先安装 DotNetSDk 6.0/8.0/10.0
-* 安装 dotnet-trace
+* 预先安装 DotNetSDk 8.0/10.0
+* dotnet 工具集
+  * 安装 dotnet-trace
+  * dotnet-coverage
+  * dotnet-reportgenerator
 * 安装 CodeServer (web 版本的 vs code)
   - 安装 vs code Extension
-* 安装 netcoredbg 调试器
-* 安装 vsdbg 调试器
+* 调试器
+  * 安装 netcoredbg 调试器
+  * 安装 vsdbg 调试器
+  * 安装 gdb
 * 内置 speedscope 项目的火焰图浏览工具
-
-同时开发一个 golang http server 来做管理接口:
-* 启动进程功能
-  - 直接启动 ✅
-  - 调试器启动
-* trace 采样功能
-  - 指定采样 n 秒 ✅
-  - 使用内置的 speedscope 展示火焰图   ✅
-* 查看堆栈功能
-  - 使用 netcoredbg 挂载进程，并且展示堆栈 ✅
-* web 调试器功能：
-  - 创建 netcoredbg 进程，然后通过 stdin / stdout 来通讯，可以通过浏览器进行更友好更好用的单步调试
-* 日志 push 功能
-  - 可以选择把 stdout 的日志，直接推送到 VictoriaLogs ✅
-* metrics push 功能
-  - 可以选择把 metrics 数据 push 到 VictoriaMetrics
-* 压测功能
-  - 内置 wrk / nghttp，可以直接开启压测
-* CodeServer 功能
+* 开发的工具
+  * golang http server 来做管理接口: DebugAdmin
+    * 启动进程功能
+      - 直接启动
+      - 调试器启动
+      - dotnet-coverage 启动
+    * trace 采样功能
+      - 指定采样 n 秒
+      - 使用内置的 speedscope 展示火焰图
+    * 查看堆栈功能
+      - 使用 netcoredbg 挂载进程，并且展示堆栈
+    * web 调试器功能：❌ (暂未开发)
+      - 创建 netcoredbg 进程，然后通过 stdin / stdout 来通讯，可以通过浏览器进行更友好更好用的单步调试
+    * 日志 push 功能
+      - 可以选择把 stdout 的日志，直接推送到 VictoriaLogs
+    * metrics push 功能❌ (暂未开发)
+      - 可以选择把 metrics 数据 push 到 VictoriaMetrics
+    * 压测功能❌ (暂未开发)
+      - 内置 wrk / nghttp，可以直接开启压测
+    * 代码覆盖率采集
+      - 采集覆盖率，生成覆盖率的 xml 文件
+      - 生成覆盖率 xml 报表
+      - 重置覆盖率数据
+      - 采集覆盖率时，根据 dll 进行过滤
+      - 采集覆盖率时，根据类名进行过滤
+      - 生成覆盖率报表时，从 pdb 文件中提取源码  
+  * pdb dump 源码工具
+    - `/usr/bin/pdb_util`: golang 实现的版本
+    - `/usr/bin/pdb_to_source`: csharp 实现的版本
+* CodeServer 功能❌ (暂未开发)
   - 如果指定源码目录，可以通过 code server 浏览和编辑源码  
