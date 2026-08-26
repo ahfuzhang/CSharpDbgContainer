@@ -22,4 +22,4 @@
   - 编译的时候提供 EnableAllSources
   - 使用工具，从 pdb 中还原出源码   ✅
   - 很多的 pdb 与很多源码目录，对应 *.cobertura.xml 中的目录   ✅
-  
+* 自动下载 snupkg 文件
