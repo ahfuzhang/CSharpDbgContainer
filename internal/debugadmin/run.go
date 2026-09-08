@@ -77,6 +77,9 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template, version string) 
 		return 1
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "target process started, pid=%d\n", target.PID())
+	if options.BindCPUs != "" {
+		go bindTargetCPUs(target, options)
+	}
 
 	server, handler, err := NewHTTPServer(staticFS, vectorTOMLTemplate, broker, target, history, version)
 	if err != nil {
@@ -112,6 +115,9 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template, version string) 
 				target = newTarget
 				handler.SetTarget(newTarget)
 				_, _ = fmt.Fprintf(os.Stdout, "target process restarted, pid=%d\n", target.PID())
+				if options.BindCPUs != "" {
+					go bindTargetCPUs(target, options)
+				}
 				continue
 			}
 			_, _ = fmt.Fprintf(os.Stdout, "target process finished, DebugAdmin will exit, err=%v\n", targetErr)
@@ -151,6 +157,7 @@ func loadOptions(args []string) (*Options, error) {
 	coverageSourceDirs := ""
 	coverageSourceFromPDB := false
 	var excludeRegexpPatternsForCoverage stringSliceFlag
+	bindCPUs := ""
 
 	flagSet := flag.NewFlagSet("DebugAdmin", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
@@ -166,6 +173,7 @@ func loadOptions(args []string) (*Options, error) {
 	flagSet.StringVar(&coverageXMLSettingsFile, "coverage.xml.settings", coverageXMLSettingsFile, "path to a dotnet-coverage settings xml file, passed via --settings when collecting coverage")
 	flagSet.StringVar(&coverageSourceDirs, "coverage.source.dirs", coverageSourceDirs, "semicolon-separated list of source directories, passed via -sourcedirs to reportgenerator; each directory must exist")
 	flagSet.BoolVar(&coverageSourceFromPDB, "coverage.source.from.pdb", coverageSourceFromPDB, "when a cobertura filename doesn't exist locally, search the target process's working directory for .pdb files and recover the source from their embedded .cs files")
+	flagSet.StringVar(&bindCPUs, "bind.cpus", bindCPUs, "bind the target process to the given CPU cores via taskset once it starts, e.g. \"2-4\" or \"0,2,4-6\"")
 	if err := flagSet.Parse(args); err != nil {
 		return nil, err
 	}
@@ -186,6 +194,10 @@ func loadOptions(args []string) (*Options, error) {
 	if err != nil {
 		return nil, err
 	}
+	bindCPUs, err = validateBindCPUs(bindCPUs)
+	if err != nil {
+		return nil, err
+	}
 	if port < 1 || port > 65535 {
 		return nil, fmt.Errorf("admin.port should be between 1 and 65535, got %d", port)
 	}
@@ -203,6 +215,7 @@ func loadOptions(args []string) (*Options, error) {
 		AutoRestart:       autoRestart,
 		WithGDB:           withGDB,
 		WithCoverage:      withCoverage,
+		BindCPUs:          bindCPUs,
 		CoverageOpts: CoverageOptions{
 			CoverageName:              uuid.NewString(),
 			CoverageXMLSettingsFile:   coverageXMLSettingsFile,

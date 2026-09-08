@@ -95,6 +95,7 @@ visit: `http://${your-server}:8089/`
   - `-log.stdout.output`: 存在这个选项时，将把被调试进程的 stdout 再次作为 DebugAdmin 的 stdout 进行输出。
   - `-coredump.unlimited`: 存在这个选项时，修改 linux 中关于 `ulimit -c` 的配置，以便崩溃时可以生成 coredump 文件。
   - `-auto.restart`: 存在这个选项时，程序会在异常崩溃的时候，自动重新拉起。
+  - `-bind.cpus=2-4`: 存在这个选项时，等待目标进程启动后，执行 `taskset -acp 2-4 $PID` 把它绑定到编号 2 到 4（含）的 3 个 CPU 核心上。也支持逗号分隔的列表，例如 `0,2,4-6`。使用 `-with.gdb` 或 `with.coverage` 时，会自动定位 gdb / dotnet-coverage 派生出来的真正目标进程再绑核，不会误把 gdb 或 dotnet-coverage 自身绑核。
   - `-with.gdb`: 存在这个选项时，以 gdb 命令脚本启动被调试程序。例如 `/app/MyProj.dll -param1=1` 将以 `gdb -x <script> --args dotnet /app/MyProj.dll -param1=1` 启动。脚本会在 `run` 前配置信号处理和日志；崩溃信息写入 `/tmp/YYYYMMDD-HHMMSS.log`，可从 Run History 中打开查看。
   - `with.coverage`: 已代码覆盖率采集的模式启动。`-with.gdb` 与 `with.coverage` 这两个选项时互斥的。
   - `--`: 分隔符。这个分隔符之后，就是 dotnet 服务器程序的命令行参数

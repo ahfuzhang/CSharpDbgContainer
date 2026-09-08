@@ -209,6 +209,8 @@ RUN apt-get update \
     wget \
     make \
     gdb \
+    jq \
+    util-linux \
  && rm -rf /var/lib/apt/lists/*
 
 # 阶段：组装最终镜像。
