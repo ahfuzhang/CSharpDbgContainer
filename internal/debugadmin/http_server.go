@@ -51,10 +51,11 @@ type AdminHandler struct {
 	speedscope         fs.FS
 	vectorTOMLTemplate *template.Template
 	targetLabel        string
+	version            string
 }
 
 // NewHTTPServer 启动 http 服务器
-func NewHTTPServer(staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess, history *RunHistory) (*http.Server, *AdminHandler, error) {
+func NewHTTPServer(staticFS fs.FS, vectorTOMLTemplate *template.Template, broker *LogBroker, target *TargetProcess, history *RunHistory, version string) (*http.Server, *AdminHandler, error) {
 	speedscopeFS, err := fs.Sub(staticFS, "build/speedscope")
 	if err != nil {
 		return nil, nil, fmt.Errorf("load embedded speedscope files: %w", err)
@@ -66,6 +67,7 @@ func NewHTTPServer(staticFS fs.FS, vectorTOMLTemplate *template.Template, broker
 		speedscope:         speedscopeFS,
 		vectorTOMLTemplate: vectorTOMLTemplate,
 		targetLabel:        strings.Join(GlobalOptions.StartupParams, " "),
+		version:            version,
 	}
 	handler.target.Store(target)
 	mux := http.NewServeMux()
@@ -100,6 +102,7 @@ func (h *AdminHandler) Register(mux *http.ServeMux) {
 }
 
 type indexPageData struct {
+	Version           string
 	TargetLabel       string
 	PID               int
 	CWD               string
@@ -164,6 +167,7 @@ func (h *AdminHandler) handleRoot(w http.ResponseWriter, _ *http.Request) {
 	target := h.target.Load()
 	pid := h.resolveTargetPID()
 	_ = indexHTMLTemplate.Execute(w, indexPageData{
+		Version:           h.version,
 		TargetLabel:       h.targetLabel,
 		PID:               pid,
 		CWD:               html.EscapeString(readProcessCwd(pid)),

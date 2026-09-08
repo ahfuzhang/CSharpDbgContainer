@@ -30,7 +30,8 @@ const (
 // Run 入口函数
 // @param staticFS speedscope的 html 静态资源文件夹
 // @param vectorTOMLTemplate logging/vector/vector.toml 的模板文件
-func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
+// @param version 编译时通过 -ldflags 注入的版本号
+func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template, version string) int {
 	// todo: 检查特殊的分隔符 --
 	options, err := loadOptions(os.Args[1:])
 	if err != nil {
@@ -77,7 +78,7 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template) int {
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "target process started, pid=%d\n", target.PID())
 
-	server, handler, err := NewHTTPServer(staticFS, vectorTOMLTemplate, broker, target, history)
+	server, handler, err := NewHTTPServer(staticFS, vectorTOMLTemplate, broker, target, history, version)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "create http server failed: %v\n", err)
 		return 1

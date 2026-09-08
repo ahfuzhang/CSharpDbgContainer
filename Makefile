@@ -5,6 +5,10 @@ DOTNET_DOCKER_IMAGE ?= ahfuzhang/csharp-dbg-all-in-one:dotnet10
 TRACEME_RUNTIME ?= linux-x64
 TRACEME_OUTPUT_DIR ?= ./build/examples/TraceMe/linux/amd64/
 
+# make build ver=1.0.0
+VERSION ?= $(if $(ver),$(ver),$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
+LDFLAGS := -X main.version=$(VERSION)
+
 docker-build:
 	docker build --platform linux/amd64 \
 	  --build-arg DOTNET_VERSION=$(ver) \
@@ -29,13 +33,16 @@ download: ./build/speedscope/.unpacked
 pdb_util:
 	go build -o ./build/pdb_util ./cmd/pdb_util/main.go
 
+pdb_util_linux_amd64:
+	GOOS=linux GOARCH=amd64 go build -o ./build/pdb_util_linux_amd64 ./cmd/pdb_util/main.go
+
 build: download pdb_util
 	mkdir -p build
-	go build -o ./build/debugadmin .
+	go build -ldflags "$(LDFLAGS)" -o ./build/debugadmin .
 
 build-linux-amd64: download
 	mkdir -p build
-	GOOS=linux GOARCH=amd64 go build -o ./build/debugadmin-linux-amd64 .
+	GOOS=linux GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o ./build/debugadmin-linux-amd64 .
 
 run:
 	./build/debugadmin -startup=/Users/ahfu/code/github.com/ahfuzhang/daily_coding/csharp/cmd_line/build/Debug/osx/arm64/cmd_line.dll
