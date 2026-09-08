@@ -120,6 +120,21 @@ RUN dotnet publish -c Release -r linux-x64 \
     -p:PublishAot=true \
     -o /out
 
+# 阶段：编译 dll_version 工具。
+# 使用 dotnet 10 SDK 镜像，产出 AOT + self-contained 的单文件二进制。
+FROM ${PDB_TO_SOURCE_SDK_IMAGE} AS dll_version_builder
+WORKDIR /src
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends clang zlib1g-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY tools/dll_version ./
+RUN dotnet publish -c Release -r linux-x64 \
+    --self-contained true \
+    -p:PublishAot=true \
+    -o /out
+
 # 阶段：安装 vsdbg 调试器。
 # 这里产出 VS 调试协议用的 vsdbg 二进制目录。
 FROM ${CODE_SERVER_IMAGE} AS vsdbg_builder
@@ -241,6 +256,7 @@ COPY --chown=abc:abc ./CodeServer/settings.json /config/.local/share/code-server
 COPY --from=debugadmin_builder /out/DebugAdmin /usr/bin/DebugAdmin
 COPY --from=debugadmin_builder /out/pdb_util /usr/bin/pdb_util
 COPY --from=pdb_to_source_builder /out/pdb_to_source /usr/bin/pdb_to_source
+COPY --from=dll_version_builder /out/dll_version /usr/bin/dll_version
 
 USER abc
 
