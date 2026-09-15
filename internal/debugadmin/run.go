@@ -417,6 +417,7 @@ func writeVectorConfig(vectorTOMLTemplate *template.Template, logPushURL string)
 	}
 
 	var output bytes.Buffer
+	// todo: 考虑支持更多参数
 	if err := vectorTOMLTemplate.Execute(&output, struct{ URL string }{URL: logPushURL}); err != nil {
 		return fmt.Errorf("render vector template failed: %w", err)
 	}
