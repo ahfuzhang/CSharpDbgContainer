@@ -24,6 +24,7 @@ type Options struct {
 	WithCoverage      bool
 	CoverageOpts      CoverageOptions
 	BindCPUs          string // taskset 的 cpu-list，例如 "2-4"；对应命令行参数 -bind.cpus
+	VectorConfigFile  string // vector.toml 模板文件路径；对应命令行参数 -vector.config，为空时使用内置模板
 }
 
 // GlobalOptions 保存命令行解析得到的配置信息。

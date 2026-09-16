@@ -32,13 +32,20 @@ const (
 // @param vectorTOMLTemplate logging/vector/vector.toml 的模板文件
 // @param version 编译时通过 -ldflags 注入的版本号
 func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template, version string) int {
-	// todo: 检查特殊的分隔符 --
 	options, err := loadOptions(os.Args[1:])
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "parse options failed: %v\n", err)
 		return 2
 	}
 	GlobalOptions = options
+	if options.VectorConfigFile != "" {
+		customTemplate, loadErr := loadVectorTOMLTemplate(options.VectorConfigFile)
+		if loadErr != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "load -vector.config failed: %v\n", loadErr)
+			return 2
+		}
+		vectorTOMLTemplate = customTemplate
+	}
 	if options.CoreDumpUnlimited {
 		if err := enableUnlimitedCoreDump(); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "set RLIMIT_CORE to unlimited failed: %v\n", err)
@@ -158,6 +165,7 @@ func loadOptions(args []string) (*Options, error) {
 	coverageSourceFromPDB := false
 	var excludeRegexpPatternsForCoverage stringSliceFlag
 	bindCPUs := ""
+	vectorConfigFile := ""
 
 	flagSet := flag.NewFlagSet("DebugAdmin", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
@@ -174,6 +182,7 @@ func loadOptions(args []string) (*Options, error) {
 	flagSet.StringVar(&coverageSourceDirs, "coverage.source.dirs", coverageSourceDirs, "semicolon-separated list of source directories, passed via -sourcedirs to reportgenerator; each directory must exist")
 	flagSet.BoolVar(&coverageSourceFromPDB, "coverage.source.from.pdb", coverageSourceFromPDB, "when a cobertura filename doesn't exist locally, search the target process's working directory for .pdb files and recover the source from their embedded .cs files")
 	flagSet.StringVar(&bindCPUs, "bind.cpus", bindCPUs, "bind the target process to the given CPU cores via taskset once it starts, e.g. \"2-4\" or \"0,2,4-6\"")
+	flagSet.StringVar(&vectorConfigFile, "vector.config", vectorConfigFile, "path to a vector.toml template file; when set, it replaces the built-in vector.toml template")
 	if err := flagSet.Parse(args); err != nil {
 		return nil, err
 	}
@@ -198,6 +207,16 @@ func loadOptions(args []string) (*Options, error) {
 	if err != nil {
 		return nil, err
 	}
+	vectorConfigFile = strings.TrimSpace(vectorConfigFile)
+	if vectorConfigFile != "" {
+		info, statErr := os.Stat(vectorConfigFile)
+		if statErr != nil {
+			return nil, fmt.Errorf("-vector.config file %q not accessible: %w", vectorConfigFile, statErr)
+		}
+		if info.IsDir() {
+			return nil, fmt.Errorf("-vector.config %q is a directory, expected a file", vectorConfigFile)
+		}
+	}
 	if port < 1 || port > 65535 {
 		return nil, fmt.Errorf("admin.port should be between 1 and 65535, got %d", port)
 	}
@@ -216,6 +235,7 @@ func loadOptions(args []string) (*Options, error) {
 		WithGDB:           withGDB,
 		WithCoverage:      withCoverage,
 		BindCPUs:          bindCPUs,
+		VectorConfigFile:  vectorConfigFile,
 		CoverageOpts: CoverageOptions{
 			CoverageName:              uuid.NewString(),
 			CoverageXMLSettingsFile:   coverageXMLSettingsFile,
@@ -353,6 +373,19 @@ func (p *VectorProcess) Stop() error {
 		}
 		return <-p.done
 	}
+}
+
+// loadVectorTOMLTemplate 从 -vector.config 指定的路径读取 vector.toml 模板文件并解析。
+func loadVectorTOMLTemplate(path string) (*template.Template, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read -vector.config file %q failed: %w", path, err)
+	}
+	tmpl, err := template.New("vector.toml").Parse(string(content))
+	if err != nil {
+		return nil, fmt.Errorf("parse -vector.config file %q as template failed: %w", path, err)
+	}
+	return tmpl, nil
 }
 
 func writeVectorConfig(vectorTOMLTemplate *template.Template, logPushURL string) error {

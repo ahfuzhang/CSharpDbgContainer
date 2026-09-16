@@ -54,6 +54,11 @@ func listContainerProcesses(startupParams []string) []ProcessInfo {
 			continue
 		}
 		cmdlineParts := readProcessCmdline(pid)
+		if len(cmdlineParts) == 0 {
+			// 僵尸进程或在两次读取之间已退出的进程：/proc/[pid]/stat 仍可读取，
+			// 但 /proc/[pid]/cmdline 已为空，此时 cmdline 字段无意义，应跳过。
+			continue
+		}
 		processes = append(processes, ProcessInfo{
 			PID:         pid,
 			Uptime:      formatUptime(time.Since(startTime)),

@@ -1,10 +1,12 @@
 package debugadmin
 
 import (
+	"bytes"
 	"compress/gzip"
 	"io"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -70,6 +72,54 @@ func TestLoadOptionsWithGDBAndCoverageMutuallyExclusive(t *testing.T) {
 	_, err := loadOptions([]string{"-with.gdb", "-with.coverage", "--", "app.dll"})
 	if err == nil {
 		t.Fatal("loadOptions() error = nil, want error for -with.gdb and -with.coverage together")
+	}
+}
+
+func TestLoadOptionsWithVectorConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vector.toml")
+	if err := os.WriteFile(path, []byte("uri = \"{{ .URL }}\"\n"), 0o644); err != nil {
+		t.Fatalf("write temp vector config failed: %v", err)
+	}
+
+	opts, err := loadOptions([]string{"-vector.config", path, "--", "app.dll"})
+	if err != nil {
+		t.Fatalf("loadOptions() error = %v", err)
+	}
+	if opts.VectorConfigFile != path {
+		t.Errorf("loadOptions() VectorConfigFile = %q, want %q", opts.VectorConfigFile, path)
+	}
+}
+
+func TestLoadOptionsWithVectorConfigMissingFile(t *testing.T) {
+	_, err := loadOptions([]string{"-vector.config", "/nonexistent/vector.toml", "--", "app.dll"})
+	if err == nil {
+		t.Fatal("loadOptions() error = nil, want error for missing -vector.config file")
+	}
+}
+
+func TestLoadOptionsWithVectorConfigDirectory(t *testing.T) {
+	_, err := loadOptions([]string{"-vector.config", t.TempDir(), "--", "app.dll"})
+	if err == nil {
+		t.Fatal("loadOptions() error = nil, want error when -vector.config points to a directory")
+	}
+}
+
+func TestLoadVectorTOMLTemplate(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "vector.toml")
+	if err := os.WriteFile(path, []byte("uri = \"{{ .URL }}\"\n"), 0o644); err != nil {
+		t.Fatalf("write temp vector config failed: %v", err)
+	}
+
+	tmpl, err := loadVectorTOMLTemplate(path)
+	if err != nil {
+		t.Fatalf("loadVectorTOMLTemplate() error = %v", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, struct{ URL string }{URL: "http://example.com"}); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if want := "uri = \"http://example.com\"\n"; buf.String() != want {
+		t.Errorf("Execute() = %q, want %q", buf.String(), want)
 	}
 }
 
