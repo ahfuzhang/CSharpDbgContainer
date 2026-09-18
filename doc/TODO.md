@@ -24,4 +24,4 @@
   - 很多的 pdb 与很多源码目录，对应 *.cobertura.xml 中的目录   ✅
 * 自动下载 snupkg 文件
 * 增加 taskset 的功能，避免压测的时候占用到主要的核
-
+* 支持 dll 反编译为 pdb

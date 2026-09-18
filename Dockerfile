@@ -80,14 +80,15 @@ RUN apt-get update \
  && rm -f dotnet-install.sh
 
 # 阶段：安装 dotnet CLI 工具。
-# 这里安装 dotnet-trace、dotnet-coverage、dotnet-reportgenerator-globaltool。
+# 这里安装 dotnet-trace、dotnet-coverage、dotnet-reportgenerator-globaltool、ilspycmd。
 FROM dotnet_sdk_builder AS dotnet_tools_builder
 ARG DOTNET_VERSION
 
 RUN mkdir -p /opt/dotnet-tools \
  && case "${DOTNET_VERSION}" in \
-      6.0) dotnet_trace_version="8.0.452401"; dotnet_coverage_version="17.12.6"; reportgenerator_version="5.2.0" ;; \
-      *)   dotnet_trace_version="";            dotnet_coverage_version="";        reportgenerator_version="" ;; \
+      6.0) dotnet_trace_version="8.0.452401"; dotnet_coverage_version="17.12.6"; reportgenerator_version="5.2.0"; ilspycmd_version="7.2.1.6856" ;; \
+      8.0) dotnet_trace_version="";            dotnet_coverage_version="";        reportgenerator_version="";      ilspycmd_version="9.1.0.7988" ;; \
+      *)   dotnet_trace_version="";            dotnet_coverage_version="";        reportgenerator_version="";      ilspycmd_version="" ;; \
     esac \
  && if [ -n "${dotnet_trace_version}" ]; then \
       ${DOTNET_ROOT}/dotnet tool install dotnet-trace --version "${dotnet_trace_version}" --tool-path /opt/dotnet-tools; \
@@ -103,6 +104,11 @@ RUN mkdir -p /opt/dotnet-tools \
       ${DOTNET_ROOT}/dotnet tool install dotnet-reportgenerator-globaltool --version "${reportgenerator_version}" --tool-path /opt/dotnet-tools; \
     else \
       ${DOTNET_ROOT}/dotnet tool install dotnet-reportgenerator-globaltool --tool-path /opt/dotnet-tools; \
+    fi \
+ && if [ -n "${ilspycmd_version}" ]; then \
+      ${DOTNET_ROOT}/dotnet tool install ilspycmd --version "${ilspycmd_version}" --tool-path /opt/dotnet-tools; \
+    else \
+      ${DOTNET_ROOT}/dotnet tool install ilspycmd --tool-path /opt/dotnet-tools; \
     fi
 
 # 阶段：编译 pdb_to_source 工具。
