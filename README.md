@@ -107,6 +107,8 @@ visit: `http://${your-server}:8089/`
       - 用于指定需要和排除的 dll
     - `-coverage.source.dirs="/dir1/;/dir2/"`: 生成 html 报表时，指定多个源码目录
     - `-coverage.source.from.pdb`: 存在这个选项时，将自动从 pdb 文件中提取源码，并生成 html report
+  - `-generate.pdb.from.dll`: 存在这个选项时，在启动目标进程之后，会异步读取目标进程的工作目录（`/proc/<pid>/cwd`）并递归遍历其下的所有 dll，用 `ilspycmd --generate-pdb --disable-updatecheck --referencepath <dll所在目录> <dll>` 为其中还没有对应 pdb 的 dll 生成 pdb 文件（pdb 与 dll 同目录，已存在则跳过）。这个过程不会阻塞 admin http 端口的监听。只在启动时执行一次，自动重启不会重复执行。
+    - 如果同时指定了 `-coverage.xml.settings`，则会先按该 xml 中 `ModulePaths` 的 `Include`/`Exclude` 正则规则筛选出需要生成 pdb 的 dll。
 
 # What I done
 

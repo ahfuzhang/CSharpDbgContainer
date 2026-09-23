@@ -25,6 +25,11 @@ type Options struct {
 	CoverageOpts      CoverageOptions
 	BindCPUs          string // taskset 的 cpu-list，例如 "2-4"；对应命令行参数 -bind.cpus
 	VectorConfigFile  string // vector.toml 模板文件路径；对应命令行参数 -vector.config，为空时使用内置模板
+	// GeneratePDBFromDLL 为 true 时，目标进程启动后会异步用 ilspycmd 为其工作目录
+	// （/proc/<pid>/cwd）下缺失 pdb 的 dll 生成 pdb 文件，不阻塞 admin http 端口的启动；
+	// 若同时指定了 -coverage.xml.settings，则按其中 ModulePaths 的 Include/Exclude
+	// 规则筛选 dll。对应命令行参数 -generate.pdb.from.dll。
+	GeneratePDBFromDLL bool
 }
 
 // GlobalOptions 保存命令行解析得到的配置信息。

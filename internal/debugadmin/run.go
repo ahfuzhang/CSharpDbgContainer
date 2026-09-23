@@ -84,6 +84,13 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template, version string) 
 		return 1
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "target process started, pid=%d\n", target.PID())
+	// 启动阶段只做一次：为运行目录下缺失 pdb 的 dll 生成 pdb 文件，之后的自动重启不再重复执行。
+	// 运行目录取目标进程的 cwd（/proc/<pid>/cwd），而不是启动 dll 所在目录，
+	// 因为启动 dll 可能位于运行目录的某个子目录（如 Files/）下，
+	// 同目录下的其他 dll 不一定和启动 dll 在同一层。异步执行，不阻塞 admin http 端口监听。
+	if options.GeneratePDBFromDLL {
+		go generatePDBFromTargetDir(target)
+	}
 	if options.BindCPUs != "" {
 		go bindTargetCPUs(target, options)
 	}
@@ -143,6 +150,19 @@ func Run(staticFS fs.FS, vectorTOMLTemplate *template.Template, version string) 
 	}
 }
 
+// generatePDBFromTargetDir 读取目标进程的 cwd（/proc/<pid>/cwd）作为运行目录，
+// 为其中缺失 pdb 的 dll 异步生成 pdb 文件，不阻塞 admin http 端口的启动。
+func generatePDBFromTargetDir(target *TargetProcess) {
+	runDir := readProcessCwd(target.PID())
+	if runDir == "" {
+		_, _ = fmt.Fprintf(os.Stderr, "-generate.pdb.from.dll skipped: cannot read cwd of target process pid=%d\n", target.PID())
+		return
+	}
+	if err := GeneratePDBFromDLLs(runDir, GlobalOptions.CoverageOpts.CoverageXMLSettingsFile); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "-generate.pdb.from.dll failed: %v\n", err)
+	}
+}
+
 func loadOptions(args []string) (*Options, error) {
 	var startupParams []string
 	for idx, item := range args {
@@ -166,6 +186,7 @@ func loadOptions(args []string) (*Options, error) {
 	var excludeRegexpPatternsForCoverage stringSliceFlag
 	bindCPUs := ""
 	vectorConfigFile := ""
+	generatePDBFromDLL := false
 
 	flagSet := flag.NewFlagSet("DebugAdmin", flag.ContinueOnError)
 	flagSet.SetOutput(io.Discard)
@@ -183,6 +204,7 @@ func loadOptions(args []string) (*Options, error) {
 	flagSet.BoolVar(&coverageSourceFromPDB, "coverage.source.from.pdb", coverageSourceFromPDB, "when a cobertura filename doesn't exist locally, search the target process's working directory for .pdb files and recover the source from their embedded .cs files")
 	flagSet.StringVar(&bindCPUs, "bind.cpus", bindCPUs, "bind the target process to the given CPU cores via taskset once it starts, e.g. \"2-4\" or \"0,2,4-6\"")
 	flagSet.StringVar(&vectorConfigFile, "vector.config", vectorConfigFile, "path to a vector.toml template file; when set, it replaces the built-in vector.toml template")
+	flagSet.BoolVar(&generatePDBFromDLL, "generate.pdb.from.dll", generatePDBFromDLL, "after starting the target, asynchronously generate .pdb files (via ilspycmd) for dlls under the target process's working directory (/proc/<pid>/cwd) that don't already have one, without blocking the admin http port from listening; when -coverage.xml.settings is also set, only dlls matching its ModulePaths Include/Exclude rules are processed")
 	if err := flagSet.Parse(args); err != nil {
 		return nil, err
 	}
@@ -226,16 +248,17 @@ func loadOptions(args []string) (*Options, error) {
 	}
 	logPushURL = strings.TrimSpace(logPushURL)
 	return &Options{
-		AdminPort:         port,
-		StartupParams:     startupParams,
-		LogPushURL:        logPushURL,
-		LogStdoutOutput:   logStdoutOutput,
-		CoreDumpUnlimited: coreDumpUnlimited,
-		AutoRestart:       autoRestart,
-		WithGDB:           withGDB,
-		WithCoverage:      withCoverage,
-		BindCPUs:          bindCPUs,
-		VectorConfigFile:  vectorConfigFile,
+		AdminPort:          port,
+		StartupParams:      startupParams,
+		LogPushURL:         logPushURL,
+		LogStdoutOutput:    logStdoutOutput,
+		CoreDumpUnlimited:  coreDumpUnlimited,
+		AutoRestart:        autoRestart,
+		WithGDB:            withGDB,
+		WithCoverage:       withCoverage,
+		BindCPUs:           bindCPUs,
+		VectorConfigFile:   vectorConfigFile,
+		GeneratePDBFromDLL: generatePDBFromDLL,
 		CoverageOpts: CoverageOptions{
 			CoverageName:              uuid.NewString(),
 			CoverageXMLSettingsFile:   coverageXMLSettingsFile,
