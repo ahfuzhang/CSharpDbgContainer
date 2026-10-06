@@ -1,20 +1,29 @@
 
-<h1>CSharp Debug Container</h1>
-A all-in-one docker image for online debug your C# backend server.
+<h1>CSharp(DotNet) Debug Container</h1>
+A all-in-one docker image for online debug your DotNet backend server.
+
+[中文](./README_cn.md)
 
 https://hub.docker.com/repository/docker/ahfuzhang/csharp-dbg-all-in-one/general
 
 <h1><font color=red>Never use it in your production environment.</font></h1>
 
+# docker
+
+```bash
+docker pull ahfuzhang/csharp-dbg-all-in-one:dotnet10
+docker run -it --rm ahfuzhang/csharp-dbg-all-in-one:dotnet10 DebugAdmin -h
+```
+
 # Run mode
 
 ## Code coverage mode
 
-![](./doc/代码覆盖率模式.png)
+![](./doc/process_arch_en.png)
 
 ## Gdb mode
 
-![](./doc/gdb%20调试模式.png)
+![](./doc/images/gdb_mode_en.png)
 
 # Debug Admin UI
 
@@ -35,7 +44,7 @@ https://hub.docker.com/repository/docker/ahfuzhang/csharp-dbg-all-in-one/general
 
 # How to use
 
-* Build your C# backend
+* Build your DotNet backend
 
 ```bash
 dotnet build xxx.csproj -c Debug \
@@ -55,7 +64,7 @@ docker run -it --rm --name=csharp_debug_admin_test \
 	--network="host" \
 	--cpuset-cpus="2" \
 	-m 512m \
-	-v "/home/ahfu/code/MyProj/bin/Debug/net6.0/":/app/ \
+	-v "~/code/MyProj/bin/Debug/net6.0/":/app/ \
 	-w /app/ \
 	-e ASPNETCORE_ENVIRONMENT=Local \
 	-e ASPNETCORE_URLS=http://localhost:5190 \
@@ -87,80 +96,86 @@ visit: `http://${your-server}:8089/`
 ## Command line params
 
 * /usr/bin/DebugAdmin
-  - 由这个管理程序来启动被调试的服务器程序
+  - This admin program is used to launch the server program being debugged
 * options:
-  - `-admin.port=8070`: 提供 web 管理端的端口，可以使用浏览器访问，查看/开启某些功能
-  - `-log.push.url=http://victoria_logs_addr`: 使用 vector 来接收服务器进程的 stdout 的日志，并且让 vector 以 jsonline 的方式把日志发送到 victoria logs 服务器。
+  - `-admin.port=8070`: the port of the web admin UI, which can be accessed via a browser to view/enable certain features
+  - `-log.push.url=http://victoria_logs_addr`: use vector to collect the stdout logs of the server process, and let vector send the logs to the victoria logs server in jsonline format.
     - eg: `http://vlogs-singlenode-k8s.logging.svc.cluster.local:9428/insert/jsonline?_time_field=_time,Timestamp&_msg_field=Message,message&_stream_fields=Level,level,pod,ip&ignore_fields=&decolorize_fields=&AccountID=0&ProjectID=0&debug=false&extra_fields=`
-  - `-log.stdout.output`: 存在这个选项时，将把被调试进程的 stdout 再次作为 DebugAdmin 的 stdout 进行输出。
-  - `-coredump.unlimited`: 存在这个选项时，修改 linux 中关于 `ulimit -c` 的配置，以便崩溃时可以生成 coredump 文件。
-  - `-auto.restart`: 存在这个选项时，程序会在异常崩溃的时候，自动重新拉起。
-  - `-bind.cpus=2-4`: 存在这个选项时，等待目标进程启动后，执行 `taskset -acp 2-4 $PID` 把它绑定到编号 2 到 4（含）的 3 个 CPU 核心上。也支持逗号分隔的列表，例如 `0,2,4-6`。使用 `-with.gdb` 或 `with.coverage` 时，会自动定位 gdb / dotnet-coverage 派生出来的真正目标进程再绑核，不会误把 gdb 或 dotnet-coverage 自身绑核。
-  - `-with.gdb`: 存在这个选项时，以 gdb 命令脚本启动被调试程序。例如 `/app/MyProj.dll -param1=1` 将以 `gdb -x <script> --args dotnet /app/MyProj.dll -param1=1` 启动。脚本会在 `run` 前配置信号处理和日志；崩溃信息写入 `/tmp/YYYYMMDD-HHMMSS.log`，可从 Run History 中打开查看。
-  - `with.coverage`: 已代码覆盖率采集的模式启动。`-with.gdb` 与 `with.coverage` 这两个选项时互斥的。
-  - `--`: 分隔符。这个分隔符之后，就是 dotnet 服务器程序的命令行参数
-    - 如果 `--` 之后的第一个路径以 xx.dll 结尾，则会自动加上 `dotnet xx.dll -params=value`
-  - 代码覆盖率相关:
-    - `-coverage.exclude.re="${regexp}"`: 在 *.cobertura.xml 文件中排除某些 package name
-    - `-coverage.xml.settings="xml file"`: 在 `dotnet-coverage collect` 的启动参数中增加 `--settings ${xml_file}` 的选项。
-      - xml 的格式请参考: [example.code.coverage.settings.xml](./doc/example.code.coverage.settings.xml)
-      - 用于指定需要和排除的 dll
-    - `-coverage.source.dirs="/dir1/;/dir2/"`: 生成 html 报表时，指定多个源码目录
-    - `-coverage.source.from.pdb`: 存在这个选项时，将自动从 pdb 文件中提取源码，并生成 html report
-  - `-generate.pdb.from.dll`: 存在这个选项时，在启动目标进程之后，会异步读取目标进程的工作目录（`/proc/<pid>/cwd`）并递归遍历其下的所有 dll，用 `ilspycmd --generate-pdb --disable-updatecheck --referencepath <dll所在目录> <dll>` 为其中还没有对应 pdb 的 dll 生成 pdb 文件（pdb 与 dll 同目录，已存在则跳过）。这个过程不会阻塞 admin http 端口的监听。只在启动时执行一次，自动重启不会重复执行。
-    - 如果同时指定了 `-coverage.xml.settings`，则会先按该 xml 中 `ModulePaths` 的 `Include`/`Exclude` 正则规则筛选出需要生成 pdb 的 dll。
+  - `-log.stdout.output`: when this option is present, the stdout of the debugged process will also be output as the stdout of DebugAdmin.
+  - `-coredump.unlimited`: when this option is present, modify the `ulimit -c` configuration in linux, so that a coredump file can be generated on crash.
+  - `-auto.restart`: when this option is present, the program will automatically restart after an abnormal crash.
+  - `-bind.cpus=2-4`: when this option is present, after the target process starts, `taskset -acp 2-4 $PID` is executed to bind it to the 3 CPU cores numbered 2 to 4 (inclusive). A comma-separated list is also supported, e.g. `0,2,4-6`. When `-with.gdb` or `with.coverage` is used, the real target process spawned by gdb / dotnet-coverage will be located automatically for CPU binding, so gdb or dotnet-coverage itself will not be mistakenly bound.
+  - `-with.gdb`: when this option is present, the debugged program is launched via a gdb command script. For example, `/app/MyProj.dll -param1=1` will be launched as `gdb -x <script> --args dotnet /app/MyProj.dll -param1=1`. The script configures signal handling and logging before `run`; crash information is written to `/tmp/YYYYMMDD-HHMMSS.log`, which can be opened and viewed from Run History.
+  - `with.coverage`: launch in code coverage collection mode. `-with.gdb` and `with.coverage` are mutually exclusive.
+  - `--`: separator. Everything after this separator is the command line parameters for the dotnet server program
+    - if the first path after `--` ends with xx.dll, `dotnet xx.dll -params=value` will be prepended automatically
+  - Code coverage related:
+    - `-coverage.exclude.re="${regexp}"`: exclude certain package names in the *.cobertura.xml file
+    - `-coverage.xml.settings="xml file"`: add the `--settings ${xml_file}` option to the startup parameters of `dotnet-coverage collect`.
+      - for the xml format, please refer to: [example.code.coverage.settings.xml](./doc/example.code.coverage.settings.xml)
+      - used to specify which dlls to include and exclude
+    - `-coverage.source.dirs="/dir1/;/dir2/"`: specify multiple source code directories when generating the html report
+    - `-coverage.source.from.pdb`: when this option is present, source code will be automatically extracted from the pdb file to generate the html report
+  - `-generate.pdb.from.dll`: when this option is present, after the target process starts, its working directory (`/proc/<pid>/cwd`) will be read asynchronously, and all dlls under it will be recursively traversed. For any dll that does not yet have a corresponding pdb, `ilspycmd --generate-pdb --disable-updatecheck --referencepath <dll directory> <dll>` will be used to generate a pdb file for it (the pdb is placed in the same directory as the dll; skipped if it already exists). This process does not block the admin http port from listening. It only runs once at startup, and is not repeated on auto-restart. Note: the dll directory must have write permission.
+    - if `-coverage.xml.settings` is also specified, the `Include`/`Exclude` regex rules under `ModulePaths` in that xml will be used first to filter which dlls need a pdb generated.
 
-# What I done
+# Feature list
 
-* 目标：制作一个 All-in-one 的镜像，便于在线调试 DotNet 程序。
-
-支持如下功能：
-* 预先安装 DotNetSDk 8.0/10.0
-* dotnet 工具集
-  * 安装 dotnet-trace
+Supports the following features:
+* Pre-installed DotNetSDK 10.0 (also supports DotNetSDK 8.0/6.0)
+* dotnet toolset
+  * dotnet-trace
   * dotnet-coverage
   * dotnet-reportgenerator
-* 安装 CodeServer (web 版本的 vs code)
-  - 安装 vs code Extension
-* 调试器
-  * 安装 netcoredbg 调试器
-  * 安装 vsdbg 调试器
-  * 安装 gdb
-* 内置 speedscope 项目的火焰图浏览工具
-* 开发的工具
-  * golang http server 来做管理接口: DebugAdmin
-    * 启动进程功能
-      - 直接启动
-      - 调试器启动
-      - dotnet-coverage 启动
-    * trace 采样功能
-      - 指定采样 n 秒
-      - 使用内置的 speedscope 展示火焰图
-    * 查看堆栈功能
-      - 使用 netcoredbg 挂载进程，并且展示堆栈
-    * web 调试器功能：❌ (暂未开发)
-      - 创建 netcoredbg 进程，然后通过 stdin / stdout 来通讯，可以通过浏览器进行更友好更好用的单步调试
-    * 日志 push 功能
-      - 可以选择把 stdout 的日志，直接推送到 VictoriaLogs
-    * metrics push 功能❌ (暂未开发)
-      - 可以选择把 metrics 数据 push 到 VictoriaMetrics
-    * 压测功能❌ (暂未开发)
-      - 内置 wrk / nghttp，可以直接开启压测
-    * 代码覆盖率采集
-      - 采集覆盖率，生成覆盖率的 xml 文件
-      - 生成覆盖率 xml 报表
-      - 重置覆盖率数据
-      - 采集覆盖率时，根据 dll 进行过滤
-      - 采集覆盖率时，根据类名进行过滤
-      - 生成覆盖率报表时，从 pdb 文件中提取源码  
-  * pdb dump 源码工具
-    - `/usr/bin/pdb_util`: golang 实现的版本
-    - `/usr/bin/pdb_to_source`: csharp 实现的版本
-* CodeServer 功能❌ (暂未开发)
-  - 如果指定源码目录，可以通过 code server 浏览和编辑源码  
+  * ilspycmd (decompiler tool)
+* CodeServer installed (web version of vs code)
+  - vs code extensions installed
+* Debuggers
+  * netcoredbg debugger installed
+  * vsdbg debugger installed
+  * gdb installed
+* Built-in speedscope flame graph viewer (for CPU Profiling)
+* Built-in oss command line tool ossutil
+* Built-in log processing tool vector
+* Developed tools
+  * golang http server as the admin interface: DebugAdmin
+    * process launch features
+      - direct launch
+      - launch via debugger
+      - launch via dotnet-coverage
+    * trace sampling features
+      - sample for n seconds
+      - show flame graph with built-in speedscope
+    * stack viewing feature
+      - attach to the process using netcoredbg and show the stack
+    * web debugger feature: ❌ (not yet developed)
+      - create a netcoredbg process and communicate via stdin / stdout, so a more friendly step debugging experience can be provided through the browser
+    * log push feature
+      - optionally push stdout logs directly to VictoriaLogs
+    * metrics push feature ❌ (not yet developed)
+      - optionally push metrics data to VictoriaMetrics
+    * load testing feature ❌ (not yet developed)
+      - built-in wrk / nghttp, can directly start load testing
+    * code coverage collection
+      - collect coverage and generate the coverage xml file
+      - generate the coverage xml report
+      - reset coverage data
+      - filter by dll when collecting coverage
+      - filter by class name when collecting coverage
+      - extract source code from pdb file when generating the coverage report
+      - filter features:
+        - filter by dll prefix
+        - filter by class name using regex
+    * decompilation on startup: check dependent dlls and automatically decompile the corresponding pdb files  
+  * pdb_to_source: parse source code out of a pdb file
+    - `/usr/bin/pdb_util`: golang implementation
+    - `/usr/bin/pdb_to_source`: csharp implementation
+  * dll version: used to view the version number of a dotnet dll  
+* CodeServer feature ❌ (not yet developed)
+  - if a source code directory is specified, the source code can be browsed and edited through code server  
 
-# 文章链接
+# Article links
 
-* [CSharp 后端服务器如何做到：一边发请求一边看代码覆盖率](https://www.cnblogs.com/ahfuzhang/p/20474477)
-* [Debug Container All-In-One: 调试 C# 后端崩溃的利器](https://www.cnblogs.com/ahfuzhang/p/21926708)
-* [【CSharp在线代码覆盖率报表】请求一条接口后，如何精确看到覆盖率哪一行](https://www.cnblogs.com/ahfuzhang/p/22611060)
+* [How can a CSharp backend server view code coverage while sending requests](https://www.cnblogs.com/ahfuzhang/p/20474477) (Chinese)
+* [Debug Container All-In-One: a powerful tool for debugging C# backend crashes](https://www.cnblogs.com/ahfuzhang/p/21926708) (Chinese)
+* [【CSharp Online Code Coverage Report】How to precisely see which line is covered after a single request](https://www.cnblogs.com/ahfuzhang/p/22611060) (Chinese)
